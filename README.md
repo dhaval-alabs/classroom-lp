@@ -64,6 +64,21 @@ Set any of these in `.env.local` — blank tags are skipped automatically:
 The conversion event fires only on a **confirmed** successful submission
 (see `trackLead()` in `src/components/Analytics.tsx`).
 
+## Admin dashboard (`/admin`)
+A lightweight, password-protected leads dashboard — no separate DB or auth
+provider, just two env vars:
+- `ADMIN_PASSWORD` — the login password.
+- `ADMIN_SESSION_SECRET` — a long random string that signs the session cookie
+  (`openssl rand -hex 32`). Both must be set or `/admin` stays disabled.
+
+Sign in at **`/admin/login`**. The dashboard shows lead-tier stats
+(hot/warm/cold/junk/new), filter tabs + search, and per-lead detail (the Gemini
+chat transcript, AI reason, and UTM/gclid/fbclid attribution), plus one-click
+**CSV export** of the current view. Auth is an HMAC-signed `httpOnly` cookie
+(12h); the `/admin` page and `/api/admin/*` routes verify it server-side, and
+`/admin` is `noindex`. Leads are read via the service-role key, so the browser
+never gets direct DB access.
+
 ## Ad attribution
 The form auto-captures `utm_source/medium/campaign/term/content`, `gclid` and
 `fbclid` from the landing URL plus the page URL & referrer, and stores them on
