@@ -1,0 +1,69 @@
+# AnalytixLabs — Offline Classroom Batch Landing Page
+
+A fast, conversion-optimized Next.js landing page for paid (Meta + Google) ad
+traffic. Captures leads for in-person Data Science & AI classroom batches into
+Supabase, with built-in Meta Pixel / Google Ads / GA4 conversion tracking.
+
+## Stack
+- Next.js 15 (App Router) + React 19 + TypeScript
+- Tailwind CSS 3
+- Supabase (lead storage via server-side service-role key)
+- `lucide-react` icons
+
+## Quick start
+```bash
+npm install
+cp .env.example .env.local   # then fill in values (optional for UI preview)
+npm run dev                  # http://localhost:3000
+```
+With Supabase left blank, the page still runs — submitted leads are logged to
+the server console instead of being persisted (handy for UI preview).
+
+## Configure lead storage (Supabase)
+1. Create / pick a Supabase project.
+2. Run the migration in `supabase/migrations/0001_classroom_leads.sql`
+   (SQL Editor → paste → run, or `supabase db push`).
+3. In `.env.local` set:
+   - `NEXT_PUBLIC_SUPABASE_URL`
+   - `SUPABASE_SERVICE_KEY` (service_role key — **server only**, never exposed)
+
+Leads land in the `classroom_leads` table. RLS is ON and only the service-role
+key (used by `/api/lead`) can read/write, so the browser can never read leads.
+
+## Configure conversion tracking (optional)
+Set any of these in `.env.local` — blank tags are skipped automatically:
+- `NEXT_PUBLIC_META_PIXEL_ID` — fires `PageView` on load + `Lead` on submit.
+- `NEXT_PUBLIC_GOOGLE_ADS_ID` + `NEXT_PUBLIC_GOOGLE_ADS_LEAD_LABEL` — fires the
+  Google Ads conversion on submit.
+- `NEXT_PUBLIC_GA4_ID` — page views + a `generate_lead` event on submit.
+
+The conversion event fires only on a **confirmed** successful submission
+(see `trackLead()` in `src/components/Analytics.tsx`).
+
+## Ad attribution
+The form auto-captures `utm_source/medium/campaign/term/content`, `gclid` and
+`fbclid` from the landing URL plus the page URL & referrer, and stores them on
+each lead row — so sales/marketing can tie every lead back to its campaign.
+
+## Editing content
+All copy, courses, cities, stats, programs, testimonials and FAQs live in
+`src/lib/site.ts`. Brand colors live in `tailwind.config.ts` (`navy` / `brand`).
+
+## Deploy
+Deploy to Vercel (recommended) and set the same env vars in the project
+settings. `npm run build` must pass first.
+
+## Project map
+```
+src/
+  app/
+    layout.tsx          # metadata, fonts, Analytics
+    page.tsx            # section assembly
+    globals.css         # Tailwind + design tokens
+    api/lead/route.ts   # POST handler → Supabase insert (validated)
+  components/           # Header, Hero, LeadForm, Sections, Faq, Footer, ...
+  lib/
+    site.ts             # all editable content
+    supabase.ts         # server-only service-role client
+supabase/migrations/    # classroom_leads table
+```
