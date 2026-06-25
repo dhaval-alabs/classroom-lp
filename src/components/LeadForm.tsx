@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { CheckCircle2, Loader2, ShieldCheck } from "lucide-react";
+import { Loader2, ShieldCheck } from "lucide-react";
 import { COURSES, CITIES, BACKGROUNDS } from "@/lib/site";
 import { trackLead } from "@/components/Analytics";
+import QualificationChat from "@/components/QualificationChat";
 
 type Status = "idle" | "submitting" | "success" | "error";
 
@@ -25,6 +26,8 @@ type Tracking = Partial<Record<(typeof TRACKING_KEYS)[number], string>> & {
 export default function LeadForm() {
   const [status, setStatus] = useState<Status>("idle");
   const [error, setError] = useState<string>("");
+  const [leadId, setLeadId] = useState<string | null>(null);
+  const [leadName, setLeadName] = useState<string>("");
   const tracking = useRef<Tracking>({});
 
   // Capture ad attribution from the URL once on mount.
@@ -79,6 +82,8 @@ export default function LeadForm() {
         throw new Error(json.error || "Something went wrong. Please try again.");
       }
       trackLead(); // fire Meta/Google conversion on confirmed success
+      setLeadId(json.id ?? null);
+      setLeadName(payload.full_name);
       setStatus("success");
     } catch (err) {
       setStatus("error");
@@ -87,31 +92,24 @@ export default function LeadForm() {
   }
 
   if (status === "success") {
-    const wa = process.env.NEXT_PUBLIC_WHATSAPP_NUMBER;
     return (
       <div
-        className="rounded-xl border border-slate-100 bg-white p-8 text-center shadow-[0_16px_40px_-8px_rgba(0,51,104,0.08)]"
+        className="rounded-xl border border-slate-100 bg-white p-5 shadow-[0_16px_40px_-8px_rgba(0,51,104,0.08)] md:p-6"
         role="status"
         aria-live="polite"
       >
-        <CheckCircle2 className="mx-auto h-14 w-14 text-brand-700" />
-        <h3 className="mt-4 text-2xl font-bold text-navy">You&apos;re all set! 🎉</h3>
-        <p className="mt-2 text-sm text-muted">
-          Thanks for registering. Our career counsellor will call you shortly with batch dates,
-          fees and EMI options for your city.
-        </p>
-        {wa && (
-          <a
-            href={`https://wa.me/${wa}?text=${encodeURIComponent(
-              "Hi, I just registered for the AnalytixLabs offline batch. Please share the details.",
-            )}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-wa px-6 py-3.5 text-base font-bold text-white transition hover:brightness-95"
-          >
-            Chat with us on WhatsApp
-          </a>
-        )}
+        <div className="mb-4 flex items-center justify-between rounded-lg border border-brand/20 bg-brand/10 px-3 py-2">
+          <span className="text-[11px] font-extrabold uppercase tracking-wider text-brand-700">
+            ✓ Registered
+          </span>
+          <span className="text-[10px] font-extrabold uppercase tracking-wider text-brand-700">
+            One quick step
+          </span>
+        </div>
+        <h3 className="mb-1 text-xl font-bold tracking-tight text-navy">
+          You&apos;re in! Let&apos;s personalise your call
+        </h3>
+        <QualificationChat leadId={leadId} name={leadName} />
       </div>
     );
   }

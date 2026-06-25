@@ -90,10 +90,14 @@ export async function POST(req: NextRequest) {
   if (!supabase || !isSupabaseConfigured()) {
     // Local preview / unconfigured: don't lose the lead, surface it in logs.
     console.warn("[lead] Supabase not configured — lead not persisted:", record);
-    return NextResponse.json({ ok: true, stored: false });
+    return NextResponse.json({ ok: true, stored: false, id: null });
   }
 
-  const { error } = await supabase.from("classroom_leads").insert(record);
+  const { data, error } = await supabase
+    .from("classroom_leads")
+    .insert(record)
+    .select("id")
+    .single();
   if (error) {
     console.error("[lead] insert failed:", error.message);
     return NextResponse.json(
@@ -102,5 +106,6 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  return NextResponse.json({ ok: true, stored: true });
+  // id lets the qualification chat attach its transcript + score to this lead.
+  return NextResponse.json({ ok: true, stored: true, id: data?.id ?? null });
 }

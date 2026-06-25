@@ -21,14 +21,38 @@ the server console instead of being persisted (handy for UI preview).
 
 ## Configure lead storage (Supabase)
 1. Create / pick a Supabase project.
-2. Run the migration in `supabase/migrations/0001_classroom_leads.sql`
-   (SQL Editor → paste → run, or `supabase db push`).
+2. Run the migrations in `supabase/migrations/` **in order**
+   (`0001_classroom_leads.sql`, then `0002_lead_qualification.sql`) — SQL Editor
+   → paste → run, or `supabase db push`.
 3. In `.env.local` set:
    - `NEXT_PUBLIC_SUPABASE_URL`
    - `SUPABASE_SERVICE_KEY` (service_role key — **server only**, never exposed)
 
 Leads land in the `classroom_leads` table. RLS is ON and only the service-role
 key (used by `/api/lead`) can read/write, so the browser can never read leads.
+
+## Lead qualification chatbot (Gemini)
+After a successful registration the form hands off to a **Gemini-powered
+qualification chatbot** (mirrors the masterclass LP flow):
+
+1. **Form submit** → `/api/lead` inserts the lead and returns its `id`.
+2. **`QualificationChat`** asks 5 quick screening questions (with one-tap
+   quick-replies), and `/api/chat/ack` fetches a short, human Gemini
+   acknowledgment between questions.
+3. On finish, **`/api/qualify`** sends the transcript to Gemini, which returns a
+   tier — **hot / warm / cold / junk** — and a one-line reason. Both the score
+   and the full transcript are written back onto the lead row
+   (`lead_score`, `lead_reason`, `qualified_at`, `chat_conversation`,
+   `status = 'qualified'`).
+
+The transcript is always saved even if scoring fails, and the whole step is
+non-blocking — if `GEMINI_API_KEY` is unset the chat still runs and simply
+skips the AI acks/scoring. Set in `.env.local`:
+- `GEMINI_API_KEY` — Google Gemini key (aistudio.google.com/apikey)
+- `GEMINI_MODEL` — optional; defaults to `gemini-2.5-flash`
+
+Sales can then filter the CRM by `lead_score` to prioritise hot/warm leads.
+Qualification logic lives in `src/lib/qualify.ts`.
 
 ## Configure conversion tracking (optional)
 Set any of these in `.env.local` — blank tags are skipped automatically:
