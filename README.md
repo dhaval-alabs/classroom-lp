@@ -20,16 +20,34 @@ With Supabase left blank, the page still runs — submitted leads are logged to
 the server console instead of being persisted (handy for UI preview).
 
 ## Configure lead storage (Supabase)
+This app lives in its **own schema** (`classroom_lp`) inside a shared Supabase
+project — isolated from other apps (e.g. `excel_to_ai`).
 1. Create / pick a Supabase project.
 2. Run the migrations in `supabase/migrations/` **in order**
-   (`0001_classroom_leads.sql`, then `0002_lead_qualification.sql`) — SQL Editor
-   → paste → run, or `supabase db push`.
-3. In `.env.local` set:
+   (`0001_classroom_leads.sql`, then `0002_lead_qualification.sql`) — they create
+   the `classroom_lp` schema + tables. SQL Editor → paste → run, or `db push`.
+3. **Expose the schema**: Supabase → Settings → API → "Exposed schemas" → add
+   `classroom_lp` (otherwise the REST client 404s).
+4. In `.env.local` set:
    - `NEXT_PUBLIC_SUPABASE_URL`
-   - `SUPABASE_SERVICE_KEY` (service_role key — **server only**, never exposed)
+   - `SUPABASE_SERVICE_KEY` (service_role **or** new `sb_secret_…` key — server only)
+   - `SUPABASE_SCHEMA=classroom_lp` (default; change to rename the schema)
 
-Leads land in the `classroom_leads` table. RLS is ON and only the service-role
-key (used by `/api/lead`) can read/write, so the browser can never read leads.
+Leads land in `classroom_lp.classroom_leads`. RLS is ON and only the secret key
+(used server-side) can read/write, so the browser can never read leads.
+
+## LeadSquared CRM sync (optional)
+When `LSQ_ACCESS` + `LSQ_SECRET` are set, leads also flow to LeadSquared:
+- **On submit** → `Lead.Capture` creates/updates the lead (name, phone, email,
+  UTM → Source fields, fbclid → `mx_FBCLID`, and course/city/background/gclid in
+  the notes field).
+- **On qualify** → the lead is matched by phone/email and tagged with the Gemini
+  `mx_Lead_Score` + the full `mx_Chat_Transcript`.
+
+Both calls are best-effort (never block the user; the lead is already safe in
+Supabase). Configure `LSQ_HOST` (region), and the field schema names
+(`LSQ_LEAD_SCORE_FIELD`, `LSQ_CHAT_FIELD`, `LSQ_FBCLID_FIELD`,
+`LSQ_NOTES_FIELD_NAME`). Logic lives in `src/lib/leadsquared.ts`.
 
 ## Lead qualification chatbot (Gemini)
 After a successful registration the form hands off to a **Gemini-powered

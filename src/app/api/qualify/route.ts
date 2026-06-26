@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { scoreConversation, saveConversation, updateLeadScore, type ConversationTurn } from "@/lib/qualify";
+import { db, isSupabaseConfigured } from "@/lib/supabase";
+import { tagLeadScore, lsqConfigured } from "@/lib/leadsquared";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -38,6 +40,24 @@ export async function POST(req: NextRequest) {
       if (leadId) await updateLeadScore(leadId, result.score, result.reason);
     } catch (err) {
       console.error("[qualify] scoring failed:", err);
+    }
+
+    // Tag the score + transcript onto the LeadSquared lead (fire-and-forget).
+    // Look up the lead's phone/email from Supabase so we can match it in LSQ.
+    if (score && leadId && lsqConfigured() && isSupabaseConfigured()) {
+      const supabase = db();
+      supabase
+        ?.from("classroom_leads")
+        .select("phone,email")
+        .eq("id", leadId)
+        .single()
+        .then(({ data }) => {
+          if (data) {
+            tagLeadScore({ phone: data.phone, email: data.email, score: score!, reason, conversation }).catch(
+              (e) => console.error("[qualify] LSQ tag failed:", e),
+            );
+          }
+        });
     }
 
     return NextResponse.json({ success: true, score, reason });

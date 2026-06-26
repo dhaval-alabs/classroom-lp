@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db, isSupabaseConfigured } from "@/lib/supabase";
+import { captureLead, lsqConfigured } from "@/lib/leadsquared";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -85,6 +86,12 @@ export async function POST(req: NextRequest) {
     user_agent: clean(req.headers.get("user-agent"), 400),
     ip,
   };
+
+  // Push to LeadSquared (fire-and-forget) — independent of Supabase so the CRM
+  // gets the lead even during local preview / if the DB write hiccups.
+  if (lsqConfigured()) {
+    captureLead(record).catch((e) => console.error("[lead] LSQ capture failed:", e));
+  }
 
   const supabase = db();
   if (!supabase || !isSupabaseConfigured()) {
