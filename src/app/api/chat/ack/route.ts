@@ -6,7 +6,7 @@ export const dynamic = "force-dynamic";
 async function callGemini(prompt: string): Promise<string> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error("GEMINI_API_KEY not configured");
-  const model = process.env.GEMINI_MODEL ?? "gemini-2.5-flash";
+  const model = process.env.GEMINI_MODEL ?? "gemini-3.5-flash";
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 8000);

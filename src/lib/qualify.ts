@@ -26,7 +26,7 @@ const MAX_SCORE_ATTEMPTS = 3;
 const PER_ATTEMPT_TIMEOUT_MS = 15000;
 
 function geminiModel() {
-  return process.env.GEMINI_MODEL ?? "gemini-2.5-flash";
+  return process.env.GEMINI_MODEL ?? "gemini-3.5-flash";
 }
 
 /** Transient failures worth retrying. 4xx (bad key, disabled API) are NOT retried. */
@@ -54,7 +54,7 @@ async function scoreConversationOnce(
         signal: controller.signal,
         body: JSON.stringify({
           contents: [{ role: "user", parts: [{ text: prompt }] }],
-          // thinkingBudget: 0 — gemini-2.5-flash's hidden reasoning tokens count
+          // thinkingBudget: 0 — the thinking model's hidden reasoning tokens count
           // against maxOutputTokens; on long transcripts that can return an empty
           // response. Disabling thinking keeps the JSON answer intact.
           generationConfig: {
