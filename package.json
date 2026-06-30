@@ -11,8 +11,10 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.48.1",
+    "@types/pg": "^8.20.0",
     "lucide-react": "^0.469.0",
     "next": "^15.1.6",
+    "pg": "^8.22.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },

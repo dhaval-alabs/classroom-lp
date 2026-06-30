@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isAdminAuthed } from "@/lib/adminauth";
-import { db, isSupabaseConfigured } from "@/lib/supabase";
+import { getServiceClient, isSupabaseConfigured } from "@/lib/supabase";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -12,7 +12,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const supabase = db();
+  const supabase = getServiceClient();
   if (!supabase || !isSupabaseConfigured()) {
     return NextResponse.json({ ok: true, configured: false, leads: [] });
   }

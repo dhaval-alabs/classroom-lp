@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { scoreConversation, saveConversation, updateLeadScore, type ConversationTurn } from "@/lib/qualify";
-import { db, isSupabaseConfigured } from "@/lib/supabase";
+import { getServiceClient, isSupabaseConfigured } from "@/lib/supabase";
 import { tagLeadScore, lsqConfigured } from "@/lib/leadsquared";
 
 export const runtime = "nodejs";
@@ -45,7 +45,7 @@ export async function POST(req: NextRequest) {
     // Tag the score + transcript onto the LeadSquared lead (fire-and-forget).
     // Look up the lead's phone/email from Supabase so we can match it in LSQ.
     if (score && leadId && lsqConfigured() && isSupabaseConfigured()) {
-      const supabase = db();
+      const supabase = getServiceClient();
       supabase
         ?.from("classroom_leads")
         .select("phone,email")

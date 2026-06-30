@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { db, isSupabaseConfigured } from "@/lib/supabase";
+import { getServiceClient, isSupabaseConfigured } from "@/lib/supabase";
 import { captureLead, lsqConfigured } from "@/lib/leadsquared";
 
 export const runtime = "nodejs";
@@ -93,7 +93,7 @@ export async function POST(req: NextRequest) {
     captureLead(record).catch((e) => console.error("[lead] LSQ capture failed:", e));
   }
 
-  const supabase = db();
+  const supabase = getServiceClient();
   if (!supabase || !isSupabaseConfigured()) {
     // Local preview / unconfigured: don't lose the lead, surface it in logs.
     console.warn("[lead] Supabase not configured — lead not persisted:", record);

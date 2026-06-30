@@ -1,4 +1,4 @@
-import { db } from "@/lib/supabase";
+import { getServiceClient } from "@/lib/supabase";
 
 export type LeadScore = "hot" | "warm" | "cold" | "junk";
 
@@ -133,7 +133,7 @@ export async function saveConversation(
   id: string,
   conversation: ConversationTurn[],
 ): Promise<void> {
-  const supabase = db();
+  const supabase = getServiceClient();
   if (!supabase) return;
   const { error } = await supabase
     .from("classroom_leads")
@@ -143,7 +143,7 @@ export async function saveConversation(
 }
 
 export async function updateLeadScore(id: string, score: LeadScore, reason: string): Promise<void> {
-  const supabase = db();
+  const supabase = getServiceClient();
   if (!supabase) return;
   const { error } = await supabase
     .from("classroom_leads")
