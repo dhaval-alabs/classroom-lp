@@ -32,6 +32,8 @@ export type CaptureInput = {
   course?: string | null;
   city?: string | null;
   background?: string | null;
+  message?: string | null;
+  consent?: boolean | null;
   utm_source?: string | null;
   utm_medium?: string | null;
   utm_campaign?: string | null;
@@ -54,14 +56,18 @@ export async function captureLead(input: CaptureInput): Promise<void> {
   const notesField = process.env.LSQ_NOTES_FIELD_NAME || "mx_Notes";
   const fbclidField = process.env.LSQ_FBCLID_FIELD || "mx_FBCLID";
 
-  const notes = [
+  let notes = [
     input.course && `Course: ${input.course}`,
     input.city && `City: ${input.city}`,
     input.background && `Profile: ${input.background}`,
+    input.message && `Message: ${input.message}`,
     input.gclid && `gclid: ${input.gclid}`,
+    input.consent != null && `Consent: ${input.consent ? "Yes" : "No"}`,
   ]
     .filter(Boolean)
     .join(" | ");
+  // mx_Notes can be long once a free-text message is included; keep it bounded.
+  if (notes.length > 2000) notes = notes.slice(0, 1990) + "…";
 
   const attrs: LsqAttr[] = [
     { Attribute: "FirstName", Value: first },
