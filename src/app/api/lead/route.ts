@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServiceClient, isSupabaseConfigured } from "@/lib/supabase";
 import { captureLead, lsqConfigured } from "@/lib/leadsquared";
+import { sendMetaCapiEvent, extractClientContext, isMetaCapiConfigured } from "@/lib/meta";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -24,12 +25,24 @@ type LeadPayload = {
   fbclid?: string;
   page_url?: string;
   referrer?: string;
+  // Meta dedup + matching context from the browser (see LeadForm).
+  meta?: {
+    event_id?: string;
+    event_source_url?: string;
+    fbp?: string;
+    fbc?: string;
+  };
 };
 
 const clean = (v: unknown, max = 500): string | null => {
   if (typeof v !== "string") return null;
   const t = v.trim();
   return t ? t.slice(0, max) : null;
+};
+
+const splitName = (full: string): { first: string; last: string } => {
+  const parts = (full || "").trim().split(/\s+/);
+  return { first: parts[0] || "", last: parts.length > 1 ? parts.slice(1).join(" ") : "" };
 };
 
 // India mobile: 10 digits, optional +91 / 0 prefix.
@@ -94,25 +107,61 @@ export async function POST(req: NextRequest) {
   }
 
   const supabase = getServiceClient();
-  if (!supabase || !isSupabaseConfigured()) {
+  let leadId: string | null = null;
+  let stored = false;
+  if (supabase && isSupabaseConfigured()) {
+    const { data, error } = await supabase
+      .from("classroom_leads")
+      .insert(record)
+      .select("id")
+      .single();
+    if (error) {
+      console.error("[lead] insert failed:", error.message);
+      return NextResponse.json(
+        { ok: false, error: "Could not submit right now. Please try again or call us." },
+        { status: 500 },
+      );
+    }
+    leadId = data?.id ?? null;
+    stored = true;
+  } else {
     // Local preview / unconfigured: don't lose the lead, surface it in logs.
     console.warn("[lead] Supabase not configured — lead not persisted:", record);
-    return NextResponse.json({ ok: true, stored: false, id: null });
   }
 
-  const { data, error } = await supabase
-    .from("classroom_leads")
-    .insert(record)
-    .select("id")
-    .single();
-  if (error) {
-    console.error("[lead] insert failed:", error.message);
-    return NextResponse.json(
-      { ok: false, error: "Could not submit right now. Please try again or call us." },
-      { status: 500 },
-    );
+  // Meta Conversions API (server-side Lead), deduped against the browser pixel
+  // via the shared event_id. Hashed PII + fbp/fbc/IP/UA give Meta the strongest
+  // signal to optimise the campaign. Best-effort — never fails the lead.
+  const meta = body.meta;
+  if (meta?.event_id && isMetaCapiConfigured()) {
+    const { first, last } = splitName(full_name);
+    const { ip: capiIp, userAgent } = extractClientContext(req);
+    const capi = await sendMetaCapiEvent({
+      eventName: "Lead",
+      eventId: meta.event_id,
+      eventSourceUrl: meta.event_source_url || record.page_url || undefined,
+      userData: {
+        email: record.email ?? undefined,
+        phone: record.phone,
+        firstName: first,
+        lastName: last,
+        city: record.city ?? undefined,
+        country: "in",
+        clientIp: capiIp || record.ip || undefined,
+        clientUserAgent: userAgent || record.user_agent || undefined,
+        fbp: meta.fbp,
+        fbc: meta.fbc,
+        externalId: leadId ?? undefined,
+      },
+      customData: {
+        content_name: record.course ?? undefined,
+        content_category: "classroom_lead",
+        lead_city: record.city ?? undefined,
+      },
+    });
+    if (!capi.ok) console.error("[lead] Meta CAPI:", capi.error);
   }
 
   // id lets the qualification chat attach its transcript + score to this lead.
-  return NextResponse.json({ ok: true, stored: true, id: data?.id ?? null });
+  return NextResponse.json({ ok: true, stored, id: leadId });
 }

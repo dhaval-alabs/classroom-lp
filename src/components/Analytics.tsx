@@ -22,11 +22,16 @@ declare global {
   }
 }
 
-/** Fire the lead/conversion event across every configured platform. */
-export function trackLead() {
+/**
+ * Fire the lead/conversion event across every configured platform.
+ * Pass the same `eventId` sent to the server-side Conversions API so Meta
+ * deduplicates the browser + server "Lead" into one event.
+ */
+export function trackLead(eventId?: string) {
   if (typeof window === "undefined") return;
   try {
-    window.fbq?.("track", "Lead");
+    if (eventId) window.fbq?.("track", "Lead", {}, { eventID: eventId });
+    else window.fbq?.("track", "Lead");
   } catch {}
   try {
     const label = process.env.NEXT_PUBLIC_GOOGLE_ADS_LEAD_LABEL;
@@ -54,6 +59,18 @@ export default function Analytics() {
           'https://connect.facebook.net/en_US/fbevents.js');
           fbq('init','${PIXEL_ID}');fbq('track','PageView');`}
         </Script>
+      )}
+      {PIXEL_ID && (
+        // eslint-disable-next-line @next/next/no-img-element
+        <noscript>
+          <img
+            height="1"
+            width="1"
+            alt=""
+            style={{ display: "none" }}
+            src={`https://www.facebook.com/tr?id=${PIXEL_ID}&ev=PageView&noscript=1`}
+          />
+        </noscript>
       )}
 
       {gtagId && (
