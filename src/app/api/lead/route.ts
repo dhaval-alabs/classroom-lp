@@ -137,7 +137,7 @@ export async function POST(req: NextRequest) {
     const { first, last } = splitName(full_name);
     const { ip: capiIp, userAgent } = extractClientContext(req);
     const capi = await sendMetaCapiEvent({
-      eventName: "Lead",
+      eventName: "lead_classroom",
       eventId: meta.event_id,
       eventSourceUrl: meta.event_source_url || record.page_url || undefined,
       userData: {

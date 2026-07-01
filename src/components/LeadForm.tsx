@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { Loader2, ShieldCheck } from "lucide-react";
 import { COURSES, CITIES, BACKGROUNDS } from "@/lib/site";
 import { trackLead } from "@/components/Analytics";
+import { newEventId, readFbCookies } from "@/lib/metaClient";
 import QualificationChat from "@/components/QualificationChat";
 
 type Status = "idle" | "submitting" | "success" | "error";
@@ -22,21 +23,6 @@ type Tracking = Partial<Record<(typeof TRACKING_KEYS)[number], string>> & {
   page_url?: string;
   referrer?: string;
 };
-
-/** Read a browser cookie (used for Meta's _fbp / _fbc ad cookies). */
-function readCookie(name: string): string | undefined {
-  if (typeof document === "undefined") return undefined;
-  const m = document.cookie.match(new RegExp("(?:^|; )" + name + "=([^;]*)"));
-  return m ? decodeURIComponent(m[1]) : undefined;
-}
-
-/** Stable id shared between the browser pixel and server CAPI for dedup. */
-function newEventId(): string {
-  try {
-    if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID();
-  } catch {}
-  return `lead-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-}
 
 export default function LeadForm() {
   const [status, setStatus] = useState<Status>("idle");
@@ -77,12 +63,7 @@ export default function LeadForm() {
     // Shared id for Meta browser↔server dedup, plus Meta's ad cookies so the
     // Conversions API can match the event to a user/click.
     const eventId = newEventId();
-    const fbp = readCookie("_fbp");
-    let fbc = readCookie("_fbc");
-    // If the pixel hasn't written _fbc yet (blocked/first hit), build it from fbclid.
-    if (!fbc && tracking.current.fbclid) {
-      fbc = `fb.1.${Date.now()}.${tracking.current.fbclid}`;
-    }
+    const { fbp, fbc } = readFbCookies();
 
     const payload = {
       full_name: String(data.get("full_name") || ""),

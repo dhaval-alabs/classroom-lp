@@ -23,15 +23,16 @@ declare global {
 }
 
 /**
- * Fire the lead/conversion event across every configured platform.
- * Pass the same `eventId` sent to the server-side Conversions API so Meta
- * deduplicates the browser + server "Lead" into one event.
+ * Fire the form-submit conversion across every configured platform.
+ * Meta side is the CUSTOM event `lead_classroom` (distinct from masterclass's
+ * standard `Lead` on the shared pixel). Pass the same `eventId` sent to the
+ * server-side Conversions API so Meta deduplicates the browser + server event.
  */
 export function trackLead(eventId?: string) {
   if (typeof window === "undefined") return;
   try {
-    if (eventId) window.fbq?.("track", "Lead", {}, { eventID: eventId });
-    else window.fbq?.("track", "Lead");
+    if (eventId) window.fbq?.("trackCustom", "lead_classroom", {}, { eventID: eventId });
+    else window.fbq?.("trackCustom", "lead_classroom");
   } catch {}
   try {
     const label = process.env.NEXT_PUBLIC_GOOGLE_ADS_LEAD_LABEL;
@@ -39,6 +40,19 @@ export function trackLead(eventId?: string) {
       window.gtag("event", "conversion", { send_to: `${GADS_ID}/${label}` });
     }
     window.gtag?.("event", "generate_lead", { value: 1 });
+  } catch {}
+}
+
+/**
+ * Deeper-funnel conversion: user confirmed "Yes, lock my seat!" after the
+ * Gemini qualification chat. Meta CUSTOM event `lock_seat_classroom`; pass the
+ * shared `eventId` so it dedups against the server-side CAPI event.
+ */
+export function trackLockSeat(eventId?: string) {
+  if (typeof window === "undefined") return;
+  try {
+    if (eventId) window.fbq?.("trackCustom", "lock_seat_classroom", {}, { eventID: eventId });
+    else window.fbq?.("trackCustom", "lock_seat_classroom");
   } catch {}
 }
 

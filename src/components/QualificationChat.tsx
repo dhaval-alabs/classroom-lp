@@ -1,6 +1,11 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+import { trackLockSeat } from "@/components/Analytics";
+import { newEventId, readFbCookies } from "@/lib/metaClient";
+
+// The high-intent option on the final question — triggers the lock-seat conversion.
+const LOCK_SEAT_ANSWER = "Yes, lock my seat!";
 
 interface Message {
   role: "assistant" | "user";
@@ -26,7 +31,7 @@ const QUESTION_OPTIONS: readonly string[][] = [
   ["Get my first data job", "Upskill in AI / GenAI", "Switch to a data career", "Just exploring"],
   ["Within 1 month", "1–3 months", "3–6 months", "Still exploring"],
   ["Gurgaon", "Noida", "Bangalore", "Online (Live)"],
-  ["Yes, lock my seat!", "I have a question first", "Not right now"],
+  [LOCK_SEAT_ANSWER, "I have a question first", "Not right now"],
 ];
 
 export default function QualificationChat({ leadId, name }: QualificationChatProps) {
@@ -88,11 +93,26 @@ export default function QualificationChat({ leadId, name }: QualificationChatPro
       setQuestionIndex((prev) => prev + 1);
       setIsSubmitting(false);
     } else {
+      // Deeper-funnel conversion — only when the user actually commits.
+      let meta:
+        | { event_id: string; event_source_url?: string; fbp?: string; fbc?: string }
+        | undefined;
+      if (trimmed === LOCK_SEAT_ANSWER) {
+        const eventId = newEventId();
+        const { fbp, fbc } = readFbCookies();
+        trackLockSeat(eventId); // browser custom event; dedups vs server CAPI
+        meta = {
+          event_id: eventId,
+          event_source_url: typeof window !== "undefined" ? window.location.href : undefined,
+          fbp,
+          fbc,
+        };
+      }
       try {
         await fetch("/api/qualify", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ leadId, conversation }),
+          body: JSON.stringify({ leadId, conversation, meta }),
         });
       } catch {
         // silent — qualification is non-blocking
