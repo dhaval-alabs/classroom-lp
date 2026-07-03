@@ -141,11 +141,15 @@ export async function captureLead(input: CaptureInput): Promise<void> {
   // matching env var points at an existing field's schema name — so they show up
   // as their own filterable columns. Only sent when configured, because sending
   // an attribute whose schema name doesn't exist makes LSQ reject the whole lead.
+  // Page URL defaults to mx_Page_Url (verified to exist; the field filter drops
+  // it safely on accounts that lack it) so it populates without a Vercel env var.
+  // Course/City/Background stay env-gated — their LSQ fields are Select-type and
+  // would reject values that aren't preset options.
   const dedicated: Array<[string | undefined, string | null | undefined]> = [
     [process.env.LSQ_COURSE_FIELD, input.course],
     [process.env.LSQ_CITY_FIELD, input.city],
     [process.env.LSQ_BACKGROUND_FIELD, input.background],
-    [process.env.LSQ_PAGE_URL_FIELD, input.page_url],
+    [process.env.LSQ_PAGE_URL_FIELD || "mx_Page_Url", input.page_url],
   ];
   for (const [field, value] of dedicated) {
     if (field && value) attrs.push({ Attribute: field, Value: value });

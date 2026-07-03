@@ -170,7 +170,7 @@ export default function QualificationChat({ leadId, name }: QualificationChatPro
     }
   }
 
-  const wa = process.env.NEXT_PUBLIC_WHATSAPP_NUMBER;
+  const wa = process.env.NEXT_PUBLIC_WHATSAPP_NUMBER || "919555219007";
 
   return (
     <div>
