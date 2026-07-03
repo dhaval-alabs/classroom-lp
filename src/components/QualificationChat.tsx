@@ -22,16 +22,39 @@ const QUESTIONS: string[] = [
   "What's your main goal with this program?",
   "When are you looking to start — the next batch, or still exploring?",
   "Which centre works best for you?",
+  "Are you looking to switch careers, start fresh, or upgrade your skills?",
+  "How likely are you to enrol in a program right now?",
+  "When should our counsellor connect with you?",
   "Last thing — our counsellor will call with batch dates, fees & EMI options. Shall I lock in your seat?",
 ];
 
 // Mirror the form's dropdowns so chat and form answers score on the same rules.
+// For the three LSQ-mapped questions (indices 4–6, see QUESTION_FIELD), the
+// option text MUST match the LeadSquared dropdown values verbatim — including
+// the "Within 7  days" double space — because it's sent straight to the field.
 const QUESTION_OPTIONS: readonly string[][] = [
   ["Student / Final year", "Recent graduate", "Working professional", "Career switcher"],
   ["Get my first data job", "Upskill in AI / GenAI", "Switch to a data career", "Just exploring"],
   ["Within 1 month", "1–3 months", "3–6 months", "Still exploring"],
   ["Gurgaon", "Noida", "Bangalore", "Online (Live)"],
+  ["Career Change", "Start a career", "Skill Upgradation"],
+  ["Ready to enrol now", "Lets discuss over a call", "Still researching", "Not sure"],
+  ["Immediately", "Within 3 days", "Within 7  days", "Within 30 days"],
   [LOCK_SEAT_ANSWER, "I have a question first", "Not right now"],
+];
+
+// LSQ Select field each question feeds (null = not synced to a dedicated field).
+// Answers to mapped questions are pushed to these fields via /api/qualify, which
+// allowlists the exact (field, value) pairs before sending.
+const QUESTION_FIELD: readonly (string | null)[] = [
+  null,
+  null,
+  null,
+  null,
+  "mx_Are_you_seeking_a_change_in_your_career_or_job",
+  "mx_mode_learning",
+  "mx_connect_to_counselling",
+  null,
 ];
 
 export default function QualificationChat({ leadId, name }: QualificationChatProps) {
@@ -49,6 +72,8 @@ export default function QualificationChat({ leadId, name }: QualificationChatPro
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isComplete, setIsComplete] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  // Accumulates answers to LSQ-mapped questions → { schemaName: answer }.
+  const crmAnswers = useRef<Record<string, string>>({});
 
   useEffect(() => {
     const el = containerRef.current;
@@ -79,6 +104,12 @@ export default function QualificationChat({ leadId, name }: QualificationChatPro
     if (!directText) setInput("");
     setIsSubmitting(true);
 
+    // Record this answer if it belongs to an LSQ-mapped question (the server
+    // allowlist drops anything that isn't an exact dropdown value, so typed
+    // custom answers are simply ignored for the CRM field).
+    const answeredField = QUESTION_FIELD[questionIndex - 1];
+    if (answeredField) crmAnswers.current[answeredField] = trimmed;
+
     // Only Q&A pairs get scored — drop the intro/UI-only messages.
     const conversation = updated.filter((m) => m.role === "user" || QUESTIONS.includes(m.content));
 
@@ -108,11 +139,12 @@ export default function QualificationChat({ leadId, name }: QualificationChatPro
           fbc,
         };
       }
+      const crmFields = Object.entries(crmAnswers.current).map(([Attribute, Value]) => ({ Attribute, Value }));
       try {
         await fetch("/api/qualify", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ leadId, conversation, meta }),
+          body: JSON.stringify({ leadId, conversation, meta, crmFields }),
         });
       } catch {
         // silent — qualification is non-blocking

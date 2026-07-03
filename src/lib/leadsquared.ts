@@ -178,6 +178,88 @@ function buildTranscript(
   return text;
 }
 
+/** Find a lead's ProspectID by phone (then email). Null if not found. */
+async function findProspectId(
+  c: { access: string; secret: string; host: string },
+  opts: { phone?: string | null; email?: string | null },
+): Promise<string | null> {
+  if (opts.phone) {
+    const res = await fetch(
+      `https://${c.host}/v2/LeadManagement.svc/RetrieveLeadByPhoneNumber?accessKey=${c.access}&secretKey=${c.secret}&phone=${encodeURIComponent(opts.phone)}`,
+    );
+    const data = await res.json().catch(() => null);
+    if (res.ok && Array.isArray(data) && data.length > 0) return data[0].ProspectID ?? null;
+  }
+  if (opts.email) {
+    const res = await fetch(
+      `https://${c.host}/v2/LeadManagement.svc/RetrieveLeadByEmailAddress?accessKey=${c.access}&secretKey=${c.secret}&emailaddress=${encodeURIComponent(opts.email)}`,
+    );
+    const data = await res.json().catch(() => null);
+    if (res.ok && Array.isArray(data) && data.length > 0) return data[0].ProspectID ?? null;
+  }
+  return null;
+}
+
+/**
+ * Chat-answer → LSQ Select field allowlist. The qualification chat is behind a
+ * PUBLIC endpoint, so we only accept these exact (field, value) pairs — a
+ * crafted request can't set arbitrary fields or inject junk. Values MUST match
+ * the LSQ dropdown options verbatim (incl. the "Within 7  days" double space).
+ */
+const ALLOWED_CHAT_FIELDS: Record<string, ReadonlySet<string>> = {
+  mx_Are_you_seeking_a_change_in_your_career_or_job: new Set([
+    "Career Change",
+    "Start a career",
+    "Skill Upgradation",
+  ]),
+  mx_mode_learning: new Set([
+    "Ready to enrol now",
+    "Will enroll somewhere",
+    "Not sure",
+    "Still researching",
+    "Lets discuss over a call",
+  ]),
+  mx_connect_to_counselling: new Set([
+    "Immediately",
+    "Within 3 days",
+    "Within 7  days",
+    "Within 30 days",
+    "DND - Do not call me",
+  ]),
+};
+
+/**
+ * Push structured chat answers (career goal / enrol intent / preferred call
+ * time) to their LSQ Select fields. Filtered against ALLOWED_CHAT_FIELDS so only
+ * known field+value pairs are ever sent. Best-effort — never throws.
+ */
+export async function updateLeadCrmFields(opts: {
+  phone?: string | null;
+  email?: string | null;
+  fields: LsqAttr[];
+}): Promise<void> {
+  const c = cfg();
+  if (!c) return;
+  const safe = opts.fields.filter((f) => ALLOWED_CHAT_FIELDS[f.Attribute]?.has(f.Value));
+  if (!safe.length) return;
+  try {
+    const prospectId = await findProspectId(c, opts);
+    if (!prospectId) {
+      console.warn("[lsq] lead not found — chat fields not set");
+      return;
+    }
+    const attrs = await keepExistingFields(c, safe);
+    if (!attrs.length) return;
+    const res = await fetch(
+      `https://${c.host}/v2/LeadManagement.svc/Lead.Update?accessKey=${c.access}&secretKey=${c.secret}&leadId=${prospectId}`,
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(attrs) },
+    );
+    if (!res.ok) console.error("[lsq] chat fields update failed:", res.status, await res.text().catch(() => ""));
+  } catch (err) {
+    console.error("[lsq] chat fields error:", err);
+  }
+}
+
 /**
  * Find the lead in LSQ (by phone, then email) and tag the Gemini score +
  * full Q&A transcript onto it.
@@ -195,21 +277,7 @@ export async function tagLeadScore(opts: {
   const chatField = process.env.LSQ_CHAT_FIELD || "mx_Chat_Transcript";
 
   try {
-    let prospectId: string | null = null;
-    if (opts.phone) {
-      const res = await fetch(
-        `https://${c.host}/v2/LeadManagement.svc/RetrieveLeadByPhoneNumber?accessKey=${c.access}&secretKey=${c.secret}&phone=${encodeURIComponent(opts.phone)}`,
-      );
-      const data = await res.json().catch(() => null);
-      if (res.ok && Array.isArray(data) && data.length > 0) prospectId = data[0].ProspectID ?? null;
-    }
-    if (!prospectId && opts.email) {
-      const res = await fetch(
-        `https://${c.host}/v2/LeadManagement.svc/RetrieveLeadByEmailAddress?accessKey=${c.access}&secretKey=${c.secret}&emailaddress=${encodeURIComponent(opts.email)}`,
-      );
-      const data = await res.json().catch(() => null);
-      if (res.ok && Array.isArray(data) && data.length > 0) prospectId = data[0].ProspectID ?? null;
-    }
+    const prospectId = await findProspectId(c, opts);
     if (!prospectId) {
       console.warn("[lsq] lead not found — score not tagged");
       return;

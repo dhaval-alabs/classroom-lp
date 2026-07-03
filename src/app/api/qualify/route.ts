@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { scoreConversation, saveConversation, updateLeadScore, type ConversationTurn } from "@/lib/qualify";
 import { getServiceClient, isSupabaseConfigured } from "@/lib/supabase";
-import { tagLeadScore, lsqConfigured } from "@/lib/leadsquared";
+import { tagLeadScore, updateLeadCrmFields, lsqConfigured } from "@/lib/leadsquared";
 import { sendMetaCapiEvent, extractClientContext, isMetaCapiConfigured } from "@/lib/meta";
 
 export const runtime = "nodejs";
@@ -66,6 +66,8 @@ export async function POST(req: NextRequest) {
       leadId?: string;
       conversation: ConversationTurn[];
       meta?: { event_id?: string; event_source_url?: string; fbp?: string; fbc?: string };
+      // Structured chat answers → LSQ Select fields. Allowlisted server-side.
+      crmFields?: Array<{ Attribute?: string; Value?: string }>;
     };
     const { leadId, conversation } = body;
 
@@ -98,6 +100,26 @@ export async function POST(req: NextRequest) {
           });
       }
       if (isMetaCapiConfigured()) await fireLockSeatCapi(req, leadId, body.meta);
+    }
+
+    // Push the structured chat answers (career goal / enrol intent / call time)
+    // to their LSQ dropdown fields. Allowlisted inside updateLeadCrmFields, so a
+    // crafted request can't set arbitrary fields. Best-effort; never blocks.
+    if (Array.isArray(body.crmFields) && body.crmFields.length && leadId && lsqConfigured() && isSupabaseConfigured()) {
+      const sb = getServiceClient();
+      if (sb) {
+        const { data } = await sb.from("classroom_leads").select("phone,email").eq("id", leadId).single();
+        if (data) {
+          const fields = body.crmFields
+            .filter((f): f is { Attribute: string; Value: string } => Boolean(f?.Attribute && f?.Value))
+            .map((f) => ({ Attribute: f.Attribute, Value: f.Value }));
+          try {
+            await updateLeadCrmFields({ phone: data.phone, email: data.email, fields });
+          } catch (e) {
+            console.error("[qualify] LSQ chat fields failed:", e);
+          }
+        }
+      }
     }
 
     // Score only if Gemini is configured; never block completion.
