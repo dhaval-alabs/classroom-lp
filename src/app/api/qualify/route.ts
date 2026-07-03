@@ -73,18 +73,31 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "conversation is required" }, { status: 400 });
     }
 
-    // Always persist the transcript first — independent of Gemini so chat data
-    // is never lost even if scoring fails or no API key is configured.
+    // Persist the transcript first, AWAITED. An un-awaited promise gets frozen
+    // when the serverless response returns, which was silently dropping some
+    // transcripts (and the status:"qualified" flip). Never fail the request.
     if (leadId) {
-      saveConversation(leadId, conversation).catch((e) =>
-        console.error("[qualify] conversation save failed:", e),
-      );
+      try {
+        await saveConversation(leadId, conversation);
+      } catch (e) {
+        console.error("[qualify] conversation save failed:", e);
+      }
     }
 
-    // Deeper-funnel Meta conversion when the user locks their seat. Independent
-    // of Gemini scoring; best-effort — never blocks completion.
-    if (body.meta?.event_id && leadId && isMetaCapiConfigured()) {
-      await fireLockSeatCapi(req, leadId, body.meta);
+    // User locked their seat ("Yes, lock my seat!"): flag it for the funnel and
+    // fire the deeper Meta conversion. Independent of Gemini scoring; best-effort.
+    if (body.meta?.event_id && leadId) {
+      const sb = getServiceClient();
+      if (sb && isSupabaseConfigured()) {
+        await sb
+          .from("classroom_leads")
+          .update({ seat_locked: true, updated_at: new Date().toISOString() })
+          .eq("id", leadId)
+          .then(({ error }) => {
+            if (error) console.error("[qualify] seat_locked update failed:", error.message);
+          });
+      }
+      if (isMetaCapiConfigured()) await fireLockSeatCapi(req, leadId, body.meta);
     }
 
     // Score only if Gemini is configured; never block completion.
@@ -103,22 +116,24 @@ export async function POST(req: NextRequest) {
       console.error("[qualify] scoring failed:", err);
     }
 
-    // Tag the score + transcript onto the LeadSquared lead (fire-and-forget).
-    // Look up the lead's phone/email from Supabase so we can match it in LSQ.
+    // Tag the score + transcript onto the LeadSquared lead — AWAITED so it isn't
+    // dropped when the response returns. Look up phone/email to match in LSQ.
     if (score && leadId && lsqConfigured() && isSupabaseConfigured()) {
       const supabase = getServiceClient();
-      supabase
-        ?.from("classroom_leads")
-        .select("phone,email")
-        .eq("id", leadId)
-        .single()
-        .then(({ data }) => {
-          if (data) {
-            tagLeadScore({ phone: data.phone, email: data.email, score: score!, reason, conversation }).catch(
-              (e) => console.error("[qualify] LSQ tag failed:", e),
-            );
+      if (supabase) {
+        const { data } = await supabase
+          .from("classroom_leads")
+          .select("phone,email")
+          .eq("id", leadId)
+          .single();
+        if (data) {
+          try {
+            await tagLeadScore({ phone: data.phone, email: data.email, score, reason, conversation });
+          } catch (e) {
+            console.error("[qualify] LSQ tag failed:", e);
           }
-        });
+        }
+      }
     }
 
     return NextResponse.json({ success: true, score, reason });

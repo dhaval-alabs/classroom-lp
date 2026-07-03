@@ -25,7 +25,7 @@ export async function GET(req: NextRequest) {
   let query = supabase
     .from("classroom_leads")
     .select(
-      "id,created_at,full_name,phone,email,course,city,background,status,lead_score,lead_reason,qualified_at,chat_conversation,utm_source,utm_campaign,gclid,fbclid",
+      "id,created_at,updated_at,full_name,phone,email,course,city,background,status,seat_locked,lead_score,lead_reason,qualified_at,chat_conversation,utm_source,utm_medium,utm_campaign,utm_term,utm_content,gclid,fbclid,referrer",
     )
     .order("created_at", { ascending: false })
     .limit(2000);

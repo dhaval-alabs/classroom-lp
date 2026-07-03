@@ -110,19 +110,63 @@ export async function POST(req: NextRequest) {
   let leadId: string | null = null;
   let stored = false;
   if (supabase && isSupabaseConfigured()) {
-    const { data, error } = await supabase
+    // Dedup by phone: one lead per number. A repeat submit UPDATES the existing
+    // lead (merging in any new non-null form/attribution fields) instead of
+    // creating a duplicate row. Qualification fields (score/chat/status) are
+    // left untouched so re-submits never wipe enrichment.
+    const { data: existing } = await supabase
       .from("classroom_leads")
-      .insert(record)
-      .select("id")
-      .single();
-    if (error) {
-      console.error("[lead] insert failed:", error.message);
-      return NextResponse.json(
-        { ok: false, error: "Could not submit right now. Please try again or call us." },
-        { status: 500 },
-      );
+      .select(
+        "id,full_name,email,course,city,background,utm_source,utm_medium,utm_campaign,utm_term,utm_content,gclid,fbclid,page_url,referrer",
+      )
+      .eq("phone", record.phone)
+      .maybeSingle();
+
+    if (existing) {
+      const merged = {
+        full_name: record.full_name || existing.full_name,
+        email: record.email ?? existing.email,
+        course: record.course ?? existing.course,
+        city: record.city ?? existing.city,
+        background: record.background ?? existing.background,
+        consent: record.consent,
+        utm_source: record.utm_source ?? existing.utm_source,
+        utm_medium: record.utm_medium ?? existing.utm_medium,
+        utm_campaign: record.utm_campaign ?? existing.utm_campaign,
+        utm_term: record.utm_term ?? existing.utm_term,
+        utm_content: record.utm_content ?? existing.utm_content,
+        gclid: record.gclid ?? existing.gclid,
+        fbclid: record.fbclid ?? existing.fbclid,
+        page_url: record.page_url ?? existing.page_url,
+        referrer: record.referrer ?? existing.referrer,
+        user_agent: record.user_agent,
+        ip: record.ip,
+        updated_at: new Date().toISOString(),
+      };
+      const { error } = await supabase.from("classroom_leads").update(merged).eq("id", existing.id);
+      if (error) {
+        console.error("[lead] update failed:", error.message);
+        return NextResponse.json(
+          { ok: false, error: "Could not submit right now. Please try again or call us." },
+          { status: 500 },
+        );
+      }
+      leadId = existing.id;
+    } else {
+      const { data, error } = await supabase
+        .from("classroom_leads")
+        .insert(record)
+        .select("id")
+        .single();
+      if (error) {
+        console.error("[lead] insert failed:", error.message);
+        return NextResponse.json(
+          { ok: false, error: "Could not submit right now. Please try again or call us." },
+          { status: 500 },
+        );
+      }
+      leadId = data?.id ?? null;
     }
-    leadId = data?.id ?? null;
     stored = true;
   } else {
     // Local preview / unconfigured: don't lose the lead, surface it in logs.

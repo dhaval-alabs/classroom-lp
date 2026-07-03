@@ -21,10 +21,28 @@ type Lead = {
   qualified_at: string | null;
   chat_conversation: Turn[] | null;
   utm_source: string | null;
+  utm_medium: string | null;
   utm_campaign: string | null;
+  utm_term: string | null;
+  utm_content: string | null;
   gclid: string | null;
   fbclid: string | null;
+  referrer: string | null;
+  updated_at: string | null;
+  seat_locked: boolean | null;
 };
+
+type Channel = "Google" | "Meta" | "Direct" | "Other";
+const CHANNELS: Channel[] = ["Google", "Meta", "Direct", "Other"];
+
+/** Best-effort channel attribution from click ids + utm_source. */
+function channelOf(l: Lead): Channel {
+  const s = (l.utm_source ?? "").toLowerCase();
+  if (l.gclid || /google|adwords|gads/.test(s)) return "Google";
+  if (l.fbclid || /meta|facebook|fb|instagram|\big\b/.test(s)) return "Meta";
+  if (s) return "Other";
+  return "Direct";
+}
 
 const SCORE_STYLES: Record<string, string> = {
   hot: "bg-green-100 text-green-700",
@@ -66,8 +84,9 @@ function ScoreBadge({ score }: { score: Lead["lead_score"] }) {
 
 function toCsv(rows: Lead[]): string {
   const cols = [
-    "created_at", "full_name", "phone", "email", "course", "city", "background",
-    "status", "lead_score", "lead_reason", "qualified_at", "utm_source", "utm_campaign", "gclid", "fbclid",
+    "created_at", "updated_at", "full_name", "phone", "email", "course", "city", "background",
+    "status", "seat_locked", "lead_score", "lead_reason", "qualified_at",
+    "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "gclid", "fbclid", "referrer",
   ] as const;
   const esc = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
   const head = cols.join(",");
@@ -118,6 +137,55 @@ export default function AdminDashboard() {
       else s.unscored++;
     }
     return s;
+  }, [leads]);
+
+  const funnel = useMemo(() => {
+    const qualified = leads.filter((l) => l.qualified_at || l.lead_score).length;
+    const hotWarm = leads.filter((l) => l.lead_score === "hot" || l.lead_score === "warm").length;
+    const locked = leads.filter((l) => l.seat_locked).length;
+    return [
+      { label: "Submitted", value: leads.length },
+      { label: "Qualified", value: qualified },
+      { label: "Hot / Warm", value: hotWarm },
+      { label: "Seat locked", value: locked },
+    ];
+  }, [leads]);
+
+  const channels = useMemo(() => {
+    const m = new Map<Channel, { count: number; quality: number }>();
+    for (const c of CHANNELS) m.set(c, { count: 0, quality: 0 });
+    for (const l of leads) {
+      const e = m.get(channelOf(l))!;
+      e.count++;
+      if (l.lead_score === "hot" || l.lead_score === "warm") e.quality++;
+    }
+    return CHANNELS.map((c) => ({ channel: c, ...m.get(c)! })).filter((r) => r.count > 0);
+  }, [leads]);
+
+  const timeseries = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const l of leads) {
+      const k = new Date(l.created_at).toLocaleDateString("en-CA");
+      counts.set(k, (counts.get(k) ?? 0) + 1);
+    }
+    const out: { label: string; count: number }[] = [];
+    const today = new Date();
+    for (let i = 13; i >= 0; i--) {
+      const d = new Date(today);
+      d.setDate(today.getDate() - i);
+      out.push({
+        label: d.toLocaleDateString("en-IN", { day: "2-digit", month: "short" }),
+        count: counts.get(d.toLocaleDateString("en-CA")) ?? 0,
+      });
+    }
+    return out;
+  }, [leads]);
+
+  // Same-phone rows (after dedup there should be none; flags any that slip in).
+  const phoneCounts = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const l of leads) m.set(l.phone, (m.get(l.phone) ?? 0) + 1);
+    return m;
   }, [leads]);
 
   const filtered = useMemo(() => {
@@ -181,7 +249,7 @@ export default function AdminDashboard() {
         <div className="mb-5 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
           Supabase isn&apos;t configured, so there are no stored leads to show. Set
           <code className="mx-1 rounded bg-amber-100 px-1">NEXT_PUBLIC_SUPABASE_URL</code> and
-          <code className="mx-1 rounded bg-amber-100 px-1">SUPABASE_SERVICE_KEY</code> in your env.
+          <code className="mx-1 rounded bg-amber-100 px-1">SUPABASE_SECRET_KEY</code> in your env.
         </div>
       )}
 
@@ -201,6 +269,21 @@ export default function AdminDashboard() {
           </div>
         ))}
       </div>
+
+      {/* Charts */}
+      {leads.length > 0 && (
+        <div className="mb-6 grid gap-4 lg:grid-cols-3">
+          <ChartCard title="Conversion funnel">
+            <FunnelChart steps={funnel} />
+          </ChartCard>
+          <ChartCard title="Leads by channel">
+            <ChannelChart rows={channels} />
+          </ChartCard>
+          <ChartCard title="Leads over time · 14 days">
+            <TrendChart days={timeseries} />
+          </ChartCard>
+        </div>
+      )}
 
       {/* Filter + search */}
       <div className="mb-4 flex flex-wrap items-center gap-3">
@@ -250,12 +333,31 @@ export default function AdminDashboard() {
             ) : (
               filtered.map((l) => {
                 const isOpen = expanded === l.id;
-                const hasDetail = (l.chat_conversation?.length ?? 0) > 0 || l.lead_reason || l.utm_source || l.gclid;
+                const isDup = (phoneCounts.get(l.phone) ?? 0) > 1;
+                const hasDetail =
+                  (l.chat_conversation?.length ?? 0) > 0 ||
+                  l.lead_reason ||
+                  l.utm_source ||
+                  l.gclid ||
+                  l.fbclid ||
+                  l.referrer;
                 return (
                   <Fragment key={l.id}>
                     <tr className="align-top hover:bg-slate-50/60">
                       <td className="whitespace-nowrap px-4 py-3 text-muted">{fmtDate(l.created_at)}</td>
-                      <td className="px-4 py-3 font-semibold text-navy">{l.full_name}</td>
+                      <td className="px-4 py-3 font-semibold text-navy">
+                        <span className="flex items-center gap-2">
+                          {l.full_name}
+                          {isDup && (
+                            <span
+                              className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold uppercase text-amber-700"
+                              title="Another lead shares this phone number"
+                            >
+                              dup
+                            </span>
+                          )}
+                        </span>
+                      </td>
                       <td className="px-4 py-3 text-muted">
                         <div>{l.phone}</div>
                         {l.email && <div className="text-xs text-slate-400">{l.email}</div>}
@@ -311,11 +413,18 @@ export default function AdminDashboard() {
                               </div>
                               <dl className="space-y-1 text-xs text-muted">
                                 {l.background && <Row k="I am a" v={l.background} />}
+                                <Row k="channel" v={channelOf(l)} />
+                                <Row k="seat locked" v={l.seat_locked ? "Yes" : "No"} />
                                 <Row k="utm_source" v={l.utm_source} />
+                                <Row k="utm_medium" v={l.utm_medium} />
                                 <Row k="utm_campaign" v={l.utm_campaign} />
+                                <Row k="utm_term" v={l.utm_term} />
+                                <Row k="utm_content" v={l.utm_content} />
                                 <Row k="gclid" v={l.gclid} />
                                 <Row k="fbclid" v={l.fbclid} />
+                                <Row k="referrer" v={l.referrer} />
                                 {l.qualified_at && <Row k="qualified" v={fmtDate(l.qualified_at)} />}
+                                {l.updated_at && <Row k="updated" v={fmtDate(l.updated_at)} />}
                               </dl>
                             </div>
                           </div>
@@ -342,6 +451,104 @@ function Row({ k, v }: { k: string; v: string | null }) {
     <div className="flex gap-2">
       <dt className="w-24 shrink-0 font-mono text-slate-400">{k}</dt>
       <dd className="break-all text-navy">{v || "—"}</dd>
+    </div>
+  );
+}
+
+function ChartCard({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="rounded-xl border border-slate-100 bg-white p-4 shadow-sm">
+      <div className="mb-3 text-xs font-bold uppercase tracking-wider text-muted">{title}</div>
+      {children}
+    </div>
+  );
+}
+
+/** Funnel: single measure across stages → one-hue bars, each labeled with count + % of top. */
+function FunnelChart({ steps }: { steps: { label: string; value: number }[] }) {
+  const top = steps[0]?.value || 1;
+  return (
+    <div className="space-y-2.5">
+      {steps.map((s, i) => {
+        const pct = Math.round((s.value / top) * 100);
+        return (
+          <div key={s.label}>
+            <div className="mb-1 flex items-baseline justify-between text-xs">
+              <span className="font-semibold text-navy">{s.label}</span>
+              <span className="text-muted">
+                {s.value}
+                {i > 0 && <span className="ml-1 text-slate-400">({pct}%)</span>}
+              </span>
+            </div>
+            <div className="h-2.5 overflow-hidden rounded-full bg-slate-100">
+              <div
+                className="h-full rounded-full bg-navy"
+                style={{ width: `${s.value > 0 ? Math.max(pct, 4) : 0}%`, opacity: 1 - i * 0.18 }}
+                title={`${s.label}: ${s.value}`}
+              />
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Leads per acquisition channel → one-hue bars, labeled with count + hot/warm quality. */
+function ChannelChart({ rows }: { rows: { channel: string; count: number; quality: number }[] }) {
+  if (!rows.length) return <p className="text-xs text-slate-400">No channel data yet.</p>;
+  const max = Math.max(...rows.map((r) => r.count), 1);
+  return (
+    <div className="space-y-2.5">
+      {rows.map((r) => (
+        <div key={r.channel}>
+          <div className="mb-1 flex items-baseline justify-between text-xs">
+            <span className="font-semibold text-navy">{r.channel}</span>
+            <span className="text-muted">
+              {r.count}
+              {r.quality > 0 && <span className="ml-1 text-green-600">· {r.quality} hot/warm</span>}
+            </span>
+          </div>
+          <div className="h-2.5 overflow-hidden rounded-full bg-slate-100">
+            <div
+              className="h-full rounded-full bg-brand-600"
+              style={{ width: `${Math.max((r.count / max) * 100, 4)}%` }}
+              title={`${r.channel}: ${r.count}`}
+            />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Daily lead volume → one-hue vertical bars (hover for the count). */
+function TrendChart({ days }: { days: { label: string; count: number }[] }) {
+  const max = Math.max(...days.map((d) => d.count), 1);
+  const total = days.reduce((a, d) => a + d.count, 0);
+  return (
+    <div>
+      <div className="mb-2 text-xs text-muted">
+        <span className="font-bold text-navy">{total}</span> in last 14 days
+      </div>
+      <div className="flex h-24 items-end gap-1">
+        {days.map((d, i) => (
+          <div
+            key={i}
+            className="flex flex-1 items-end justify-center self-stretch"
+            title={`${d.label}: ${d.count}`}
+          >
+            <div
+              className="w-full rounded-t bg-navy/80"
+              style={{ height: `${d.count ? Math.max((d.count / max) * 100, 6) : 0}%` }}
+            />
+          </div>
+        ))}
+      </div>
+      <div className="mt-1.5 flex justify-between text-[9px] text-slate-400">
+        <span>{days[0]?.label}</span>
+        <span>{days[days.length - 1]?.label}</span>
+      </div>
     </div>
   );
 }
