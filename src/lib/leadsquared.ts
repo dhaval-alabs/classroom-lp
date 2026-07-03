@@ -17,6 +17,56 @@ export function lsqConfigured(): boolean {
 
 const SCORE_LABEL: Record<string, string> = { hot: "Hot", warm: "Warm", cold: "Cold", junk: "Junk" };
 
+const isValidEmail = (e: string): boolean => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
+
+/**
+ * LeadSquared rejects the ENTIRE payload with a 412 if any attribute's schema
+ * name doesn't exist in the account (this is a shared account, so field sets
+ * differ). We fetch the account's field list once (cached) and drop unknown
+ * attributes before sending, so one stray field can never nuke the whole lead.
+ * Core identity fields are always kept as a backstop. Best-effort: if metadata
+ * can't be fetched we send everything (original behaviour).
+ */
+const CORE_FIELDS = new Set(["FirstName", "LastName", "Phone", "EmailAddress", "Source"]);
+let fieldCache: { at: number; fields: Set<string> } | null = null;
+const FIELD_TTL_MS = 10 * 60 * 1000;
+
+async function validFieldNames(c: { access: string; secret: string; host: string }): Promise<Set<string> | null> {
+  if (fieldCache && Date.now() - fieldCache.at < FIELD_TTL_MS) return fieldCache.fields;
+  try {
+    const res = await fetch(
+      `https://${c.host}/v2/LeadManagement.svc/LeadsMetaData.Get?accessKey=${c.access}&secretKey=${c.secret}`,
+    );
+    const data = await res.json().catch(() => null);
+    if (res.ok && Array.isArray(data)) {
+      const fields = new Set<string>(
+        data.map((f: { SchemaName?: string }) => f.SchemaName).filter((s): s is string => Boolean(s)),
+      );
+      fieldCache = { at: Date.now(), fields };
+      return fields;
+    }
+  } catch (err) {
+    console.error("[lsq] metadata fetch failed:", err);
+  }
+  return null;
+}
+
+async function keepExistingFields(
+  c: { access: string; secret: string; host: string },
+  attrs: LsqAttr[],
+): Promise<LsqAttr[]> {
+  const valid = await validFieldNames(c);
+  if (!valid) return attrs;
+  const kept: LsqAttr[] = [];
+  const dropped: string[] = [];
+  for (const a of attrs) {
+    if (CORE_FIELDS.has(a.Attribute) || valid.has(a.Attribute)) kept.push(a);
+    else dropped.push(a.Attribute);
+  }
+  if (dropped.length) console.warn(`[lsq] dropping unknown fields: ${dropped.join(", ")}`);
+  return kept;
+}
+
 function splitName(full: string): { first: string; last: string } {
   const parts = (full || "").trim().split(/\s+/);
   const first = parts[0] || "Lead";
@@ -47,14 +97,16 @@ export type CaptureInput = {
 /**
  * Create/update the lead in LeadSquared (Lead.Capture upserts by the account's
  * lead-identity config). Course/city/background/gclid go into the Notes field
- * so we don't depend on custom-field schema names that may not exist.
+ * (LSQ_NOTES_FIELD_NAME, default mx_Extra_Notes) so we don't depend on custom-
+ * field schema names that may not exist. Unknown fields are filtered out before
+ * sending (see keepExistingFields).
  */
 export async function captureLead(input: CaptureInput): Promise<void> {
   const c = cfg();
   if (!c) return;
 
   const { first, last } = splitName(input.full_name);
-  const notesField = process.env.LSQ_NOTES_FIELD_NAME || "mx_Notes";
+  const notesField = process.env.LSQ_NOTES_FIELD_NAME || "mx_Extra_Notes";
   const fbclidField = process.env.LSQ_FBCLID_FIELD || "mx_FBCLID";
 
   let notes = [
@@ -77,23 +129,34 @@ export async function captureLead(input: CaptureInput): Promise<void> {
     { Attribute: "Phone", Value: input.phone },
     { Attribute: "Source", Value: input.utm_source || "Classroom Landing Page" },
   ];
-  if (input.email) attrs.push({ Attribute: "EmailAddress", Value: input.email });
+  // Only send a valid email — LSQ rejects the whole payload on a malformed one.
+  if (input.email && isValidEmail(input.email)) attrs.push({ Attribute: "EmailAddress", Value: input.email });
   if (input.utm_medium) attrs.push({ Attribute: "SourceMedium", Value: input.utm_medium });
   if (input.utm_campaign) attrs.push({ Attribute: "SourceCampaign", Value: input.utm_campaign });
   if (input.utm_content) attrs.push({ Attribute: "SourceContent", Value: input.utm_content });
   if (input.utm_term) attrs.push({ Attribute: "SourceTerm", Value: input.utm_term });
   if (input.fbclid) attrs.push({ Attribute: fbclidField, Value: input.fbclid });
-  // Landing-page URL: also sent as a dedicated field if LSQ_PAGE_URL_FIELD is set
-  // to an existing LSQ field's schema name. It's always in Notes above too, so
-  // it's visible even without that field.
-  const pageUrlField = process.env.LSQ_PAGE_URL_FIELD;
-  if (pageUrlField && input.page_url) attrs.push({ Attribute: pageUrlField, Value: input.page_url });
+  // Course / Location / Background / landing-page URL are always folded into the
+  // Notes field above. Each is ALSO sent to a dedicated LSQ field when the
+  // matching env var points at an existing field's schema name — so they show up
+  // as their own filterable columns. Only sent when configured, because sending
+  // an attribute whose schema name doesn't exist makes LSQ reject the whole lead.
+  const dedicated: Array<[string | undefined, string | null | undefined]> = [
+    [process.env.LSQ_COURSE_FIELD, input.course],
+    [process.env.LSQ_CITY_FIELD, input.city],
+    [process.env.LSQ_BACKGROUND_FIELD, input.background],
+    [process.env.LSQ_PAGE_URL_FIELD, input.page_url],
+  ];
+  for (const [field, value] of dedicated) {
+    if (field && value) attrs.push({ Attribute: field, Value: value });
+  }
   if (notes) attrs.push({ Attribute: notesField, Value: notes });
 
+  const safeAttrs = await keepExistingFields(c, attrs);
   try {
     const res = await fetch(
       `https://${c.host}/v2/LeadManagement.svc/Lead.Capture?accessKey=${c.access}&secretKey=${c.secret}`,
-      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(attrs) },
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(safeAttrs) },
     );
     if (!res.ok) console.error("[lsq] capture failed:", res.status, await res.text().catch(() => ""));
   } catch (err) {
@@ -151,15 +214,17 @@ export async function tagLeadScore(opts: {
       console.warn("[lsq] lead not found — score not tagged");
       return;
     }
+    const tagAttrs = await keepExistingFields(c, [
+      { Attribute: scoreField, Value: SCORE_LABEL[opts.score] ?? opts.score },
+      { Attribute: chatField, Value: buildTranscript(opts.conversation, opts.score, opts.reason) },
+    ]);
+    if (!tagAttrs.length) return;
     await fetch(
       `https://${c.host}/v2/LeadManagement.svc/Lead.Update?accessKey=${c.access}&secretKey=${c.secret}&leadId=${prospectId}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify([
-          { Attribute: scoreField, Value: SCORE_LABEL[opts.score] ?? opts.score },
-          { Attribute: chatField, Value: buildTranscript(opts.conversation, opts.score, opts.reason) },
-        ]),
+        body: JSON.stringify(tagAttrs),
       },
     );
   } catch (err) {

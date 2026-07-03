@@ -100,11 +100,13 @@ export async function POST(req: NextRequest) {
     ip,
   };
 
-  // Push to LeadSquared (fire-and-forget) — independent of Supabase so the CRM
-  // gets the lead even during local preview / if the DB write hiccups.
-  if (lsqConfigured()) {
-    captureLead(record).catch((e) => console.error("[lead] LSQ capture failed:", e));
-  }
+  // Push to LeadSquared — kicked off now so it runs concurrently with the DB
+  // write, but AWAITED before the response returns (see end of handler). A
+  // fire-and-forget fetch gets frozen when the serverless function returns,
+  // which was silently dropping LSQ captures. Independent of Supabase so the
+  // CRM gets the lead even during local preview / if the DB write hiccups.
+  // captureLead never throws (it catches internally), so this is safe to await.
+  const lsqCapture = lsqConfigured() ? captureLead(record) : null;
 
   const supabase = getServiceClient();
   let leadId: string | null = null;
@@ -205,6 +207,9 @@ export async function POST(req: NextRequest) {
     });
     if (!capi.ok) console.error("[lead] Meta CAPI:", capi.error);
   }
+
+  // Make sure the LSQ capture completes before the serverless function freezes.
+  if (lsqCapture) await lsqCapture;
 
   // id lets the qualification chat attach its transcript + score to this lead.
   return NextResponse.json({ ok: true, stored, id: leadId });
