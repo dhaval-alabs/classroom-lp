@@ -41,6 +41,7 @@ export type CaptureInput = {
   utm_content?: string | null;
   gclid?: string | null;
   fbclid?: string | null;
+  page_url?: string | null;
 };
 
 /**
@@ -62,6 +63,7 @@ export async function captureLead(input: CaptureInput): Promise<void> {
     input.background && `Profile: ${input.background}`,
     input.message && `Message: ${input.message}`,
     input.gclid && `gclid: ${input.gclid}`,
+    input.page_url && `Page: ${input.page_url}`,
     input.consent != null && `Consent: ${input.consent ? "Yes" : "No"}`,
   ]
     .filter(Boolean)
@@ -81,6 +83,11 @@ export async function captureLead(input: CaptureInput): Promise<void> {
   if (input.utm_content) attrs.push({ Attribute: "SourceContent", Value: input.utm_content });
   if (input.utm_term) attrs.push({ Attribute: "SourceTerm", Value: input.utm_term });
   if (input.fbclid) attrs.push({ Attribute: fbclidField, Value: input.fbclid });
+  // Landing-page URL: also sent as a dedicated field if LSQ_PAGE_URL_FIELD is set
+  // to an existing LSQ field's schema name. It's always in Notes above too, so
+  // it's visible even without that field.
+  const pageUrlField = process.env.LSQ_PAGE_URL_FIELD;
+  if (pageUrlField && input.page_url) attrs.push({ Attribute: pageUrlField, Value: input.page_url });
   if (notes) attrs.push({ Attribute: notesField, Value: notes });
 
   try {
