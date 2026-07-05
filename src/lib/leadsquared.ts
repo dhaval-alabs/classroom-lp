@@ -185,7 +185,9 @@ function buildTranscript(
     .map((m) => `${m.role === "assistant" ? "Q" : "A"}: ${m.content.trim()}`);
   const header = `Lead Score: ${SCORE_LABEL[score] ?? score}${reason ? ` — ${reason}` : ""}`;
   let text = `${header}\n\n${lines.join("\n")}`;
-  if (text.length > 3000) text = text.slice(0, 2990) + "…";
+  // mx_Chat_Transcript's MaxLength in LSQ is 1000 — truncate ourselves so the
+  // cut is predictable (LSQ silently drops anything beyond the field limit).
+  if (text.length > 1000) text = text.slice(0, 999) + "…";
   return text;
 }
 
