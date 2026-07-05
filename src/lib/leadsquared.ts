@@ -109,14 +109,17 @@ export async function captureLead(input: CaptureInput): Promise<void> {
   const notesField = process.env.LSQ_NOTES_FIELD_NAME || "mx_Extra_Notes";
   const fbclidField = process.env.LSQ_FBCLID_FIELD || "mx_FBCLID";
 
+  // LSQ stores mx_Extra_Notes truncated to 256 chars, so short high-value
+  // fields go first and the long ad URL goes last (it lives in full in
+  // mx_Page_Url anyway).
   let notes = [
     input.course && `Course: ${input.course}`,
     input.city && `City: ${input.city}`,
     input.background && `Profile: ${input.background}`,
+    input.consent != null && `Consent: ${input.consent ? "Yes" : "No"}`,
     input.message && `Message: ${input.message}`,
     input.gclid && `gclid: ${input.gclid}`,
     input.page_url && `Page: ${input.page_url}`,
-    input.consent != null && `Consent: ${input.consent ? "Yes" : "No"}`,
   ]
     .filter(Boolean)
     .join(" | ");
@@ -145,12 +148,16 @@ export async function captureLead(input: CaptureInput): Promise<void> {
   // it safely on accounts that lack it) so it populates without a Vercel env var.
   // Course/City/Background stay env-gated — their LSQ fields are Select-type and
   // would reject values that aren't preset options.
+  const pageUrlField = process.env.LSQ_PAGE_URL_FIELD || "mx_Page_Url";
   const dedicated: Array<[string | undefined, string | null | undefined]> = [
     [process.env.LSQ_COURSE_FIELD, input.course],
     [process.env.LSQ_CITY_FIELD, input.city],
     [process.env.LSQ_BACKGROUND_FIELD, input.background],
-    [process.env.LSQ_PAGE_URL_FIELD || "mx_Page_Url", input.page_url],
+    [pageUrlField, input.page_url],
   ];
+  // If LSQ_PAGE_URL_FIELD is set to a misnamed field, the existence filter would
+  // silently drop it and the URL would vanish — always send mx_Page_Url too.
+  if (pageUrlField !== "mx_Page_Url") dedicated.push(["mx_Page_Url", input.page_url]);
   for (const [field, value] of dedicated) {
     if (field && value) attrs.push({ Attribute: field, Value: value });
   }
