@@ -1,5 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { scoreConversation, saveConversation, updateLeadScore, type ConversationTurn } from "@/lib/qualify";
+import {
+  scoreConversation,
+  saveConversation,
+  updateLeadScore,
+  type ConversationTurn,
+  type LeadContext,
+} from "@/lib/qualify";
 import { getServiceClient, isSupabaseConfigured } from "@/lib/supabase";
 import { tagLeadScore, updateLeadCrmFields, lsqConfigured } from "@/lib/leadsquared";
 import { sendMetaCapiEvent, extractClientContext, isMetaCapiConfigured } from "@/lib/meta";
@@ -86,6 +92,21 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // One lead fetch, reused by scoring (identity signals), the LSQ dropdown
+    // sync and the LSQ score tag below.
+    let lead: LeadContext | null = null;
+    if (leadId && isSupabaseConfigured()) {
+      const sb = getServiceClient();
+      if (sb) {
+        const { data } = await sb
+          .from("classroom_leads")
+          .select("full_name,phone,email,course,city,background,message")
+          .eq("id", leadId)
+          .single();
+        lead = data ?? null;
+      }
+    }
+
     // User locked their seat ("Yes, lock my seat!"): flag it for the funnel and
     // fire the deeper Meta conversion. Independent of Gemini scoring; best-effort.
     if (body.meta?.event_id && leadId) {
@@ -105,20 +126,14 @@ export async function POST(req: NextRequest) {
     // Push the structured chat answers (career goal / enrol intent / call time)
     // to their LSQ dropdown fields. Allowlisted inside updateLeadCrmFields, so a
     // crafted request can't set arbitrary fields. Best-effort; never blocks.
-    if (Array.isArray(body.crmFields) && body.crmFields.length && leadId && lsqConfigured() && isSupabaseConfigured()) {
-      const sb = getServiceClient();
-      if (sb) {
-        const { data } = await sb.from("classroom_leads").select("phone,email").eq("id", leadId).single();
-        if (data) {
-          const fields = body.crmFields
-            .filter((f): f is { Attribute: string; Value: string } => Boolean(f?.Attribute && f?.Value))
-            .map((f) => ({ Attribute: f.Attribute, Value: f.Value }));
-          try {
-            await updateLeadCrmFields({ phone: data.phone, email: data.email, fields });
-          } catch (e) {
-            console.error("[qualify] LSQ chat fields failed:", e);
-          }
-        }
+    if (Array.isArray(body.crmFields) && body.crmFields.length && lead && lsqConfigured()) {
+      const fields = body.crmFields
+        .filter((f): f is { Attribute: string; Value: string } => Boolean(f?.Attribute && f?.Value))
+        .map((f) => ({ Attribute: f.Attribute, Value: f.Value }));
+      try {
+        await updateLeadCrmFields({ phone: lead.phone, email: lead.email, fields });
+      } catch (e) {
+        console.error("[qualify] LSQ chat fields failed:", e);
       }
     }
 
@@ -130,7 +145,8 @@ export async function POST(req: NextRequest) {
     let score: string | null = null;
     let reason = "";
     try {
-      const result = await scoreConversation(conversation);
+      // Form data gives the scorer identity-quality signals (name/email/phone).
+      const result = await scoreConversation(conversation, lead);
       score = result.score;
       reason = result.reason;
       if (leadId) await updateLeadScore(leadId, result.score, result.reason);
@@ -139,22 +155,12 @@ export async function POST(req: NextRequest) {
     }
 
     // Tag the score + transcript onto the LeadSquared lead — AWAITED so it isn't
-    // dropped when the response returns. Look up phone/email to match in LSQ.
-    if (score && leadId && lsqConfigured() && isSupabaseConfigured()) {
-      const supabase = getServiceClient();
-      if (supabase) {
-        const { data } = await supabase
-          .from("classroom_leads")
-          .select("phone,email")
-          .eq("id", leadId)
-          .single();
-        if (data) {
-          try {
-            await tagLeadScore({ phone: data.phone, email: data.email, score, reason, conversation });
-          } catch (e) {
-            console.error("[qualify] LSQ tag failed:", e);
-          }
-        }
+    // dropped when the response returns.
+    if (score && lead && lsqConfigured()) {
+      try {
+        await tagLeadScore({ phone: lead.phone, email: lead.email, score, reason, conversation });
+      } catch (e) {
+        console.error("[qualify] LSQ tag failed:", e);
       }
     }
 

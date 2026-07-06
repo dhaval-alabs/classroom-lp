@@ -1,4 +1,5 @@
 import { getServiceClient } from "@/lib/supabase";
+import { ALL_PRESET_ANSWERS } from "@/lib/chatFlow";
 
 export type LeadScore = "hot" | "warm" | "cold" | "junk";
 
@@ -7,16 +8,38 @@ export interface ConversationTurn {
   content: string;
 }
 
-const SYSTEM_PROMPT = `You are a lead qualification assistant for AnalytixLabs, India's leading Data Science & AI education provider, screening prospects for an OFFLINE classroom batch.
+/** Form fields passed alongside the chat so scoring can judge identity quality. */
+export interface LeadContext {
+  full_name?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  course?: string | null;
+  city?: string | null;
+  background?: string | null;
+  message?: string | null;
+}
 
-Assess the prospect's purchase intent from their chat answers and return EXACTLY this JSON — no extra text:
-{"score":"hot","reason":"One sentence."}
+// Calibration: these leads come from paid social ads and counsellor outcomes
+// show the majority end up junk or unreachable — so the prompt biases DOWN.
+// hot/warm must actually predict a reachable, sales-ready prospect.
+const SYSTEM_PROMPT = `You are a strict lead-qualification analyst for AnalytixLabs, India's leading Data Science & AI education provider, screening prospects for an OFFLINE classroom batch.
+
+These leads come from paid social-media ads. Historically most turn out junk or unreachable when counsellors call, so score CONSERVATIVELY: when in doubt, score one tier lower. hot/warm must mean "a counsellor should call this person first".
+
+Return EXACTLY this JSON — no extra text:
+{"score":"cold","reason":"One sentence."}
+
+Weigh these signals:
+- Identity quality: gibberish or placeholder name (single letters, "test", keyboard mash), fake-looking email, or a suspicious phone pattern (repeated/sequential digits) => junk regardless of answers.
+- Effort: answers marked "(tapped preset)" are one-tap responses — weak evidence on their own. A typed, specific answer is strong evidence of real intent.
+- Consistency: contradictions (e.g. "Just exploring" or "3–6 months" but then "lock my seat", or a chosen centre that conflicts with the stated city) cap the score at cold.
+- Commitment: locking the seat is a single tap — it only counts when the rest of the run-through is consistent with it.
 
 Tiers:
-- hot: clear goal, wants to start within 1-3 months, high intent, ready to join a batch
-- warm: interested but 3-6 months out, comparing options, or moderate fit
-- cold: low urgency, 6+ months, early research, significant barriers
-- junk: bot, gibberish, fake details, zero intent, irrelevant answers
+- hot: coherent real identity, start timeline within ~1 month, specific centre chosen, explicitly locked the seat, and at least one sign of genuine engagement (a typed answer or fully consistent specifics).
+- warm: real identity and genuine interest with a 1–3 month timeline, or a consistent all-tap run-through that locked the seat.
+- cold: 3+ months out, "just exploring", declined or deferred the counsellor call, or low-effort but plausibly real.
+- junk: bot-like behaviour, gibberish or fake details, contradictory or irrelevant answers.
 
 score must be one of: hot warm cold junk (lowercase).`;
 
@@ -99,14 +122,36 @@ async function scoreConversationOnce(
 
 export async function scoreConversation(
   conversation: ConversationTurn[],
+  lead?: LeadContext | null,
 ): Promise<{ score: LeadScore; reason: string }> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error("GEMINI_API_KEY not configured");
 
+  // Mark one-tap answers so the model can separate low-effort run-throughs
+  // from typed engagement (a key predictor of reachability).
   const transcript = conversation
-    .map((m) => `${m.role === "assistant" ? "Counsellor" : "Prospect"}: ${m.content}`)
+    .map((m) =>
+      m.role === "assistant"
+        ? `Counsellor: ${m.content}`
+        : `Prospect: ${m.content}${ALL_PRESET_ANSWERS.has(m.content.trim()) ? " (tapped preset)" : " (typed)"}`,
+    )
     .join("\n");
-  const prompt = `${SYSTEM_PROMPT}\n\nConversation:\n${transcript}\n\nReturn only the JSON object.`;
+
+  const formData = lead
+    ? [
+        lead.full_name && `Name: ${lead.full_name}`,
+        lead.email && `Email: ${lead.email}`,
+        lead.phone && `Phone: ${lead.phone}`,
+        lead.course && `Course selected: ${lead.course}`,
+        lead.city && `City: ${lead.city}`,
+        lead.background && `Background: ${lead.background}`,
+        lead.message && `Message: ${lead.message}`,
+      ]
+        .filter(Boolean)
+        .join("\n")
+    : "";
+
+  const prompt = `${SYSTEM_PROMPT}\n\n${formData ? `Registration form data:\n${formData}\n\n` : ""}Conversation:\n${transcript}\n\nReturn only the JSON object.`;
 
   let lastErr: unknown;
   for (let attempt = 1; attempt <= MAX_SCORE_ATTEMPTS; attempt++) {
@@ -152,23 +197,3 @@ export async function updateLeadScore(id: string, score: LeadScore, reason: stri
   if (error) throw error;
 }
 
-/**
- * Score a lead and persist the result. Never throws — logs errors instead.
- * Conversation is saved immediately so chat data is never lost even if Gemini fails.
- */
-export async function scoreAndSave(params: {
-  leadId: string;
-  conversation: ConversationTurn[];
-}): Promise<void> {
-  const { leadId, conversation } = params;
-  saveConversation(leadId, conversation).catch((e) =>
-    console.error("[qualify] conversation save failed:", e),
-  );
-  try {
-    const { score, reason } = await scoreConversation(conversation);
-    await updateLeadScore(leadId, score, reason);
-    console.log(`[qualify] ${leadId} = ${score}`);
-  } catch (err) {
-    console.error(`[qualify] scoring failed for ${leadId}:`, err);
-  }
-}
