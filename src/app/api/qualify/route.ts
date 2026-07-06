@@ -12,6 +12,9 @@ import { sendMetaCapiEvent, extractClientContext, isMetaCapiConfigured } from "@
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+// The client fires this request without awaiting it; give the Gemini scoring
+// retries + LSQ syncs room to finish instead of Vercel's ~10s default cap.
+export const maxDuration = 60;
 
 const splitName = (full: string): { first: string; last: string } => {
   const parts = (full || "").trim().split(/\s+/);

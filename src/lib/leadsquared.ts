@@ -36,6 +36,7 @@ async function validFieldNames(c: { access: string; secret: string; host: string
   try {
     const res = await fetch(
       `https://${c.host}/v2/LeadManagement.svc/LeadsMetaData.Get?accessKey=${c.access}&secretKey=${c.secret}`,
+      { signal: AbortSignal.timeout(5000) },
     );
     const data = await res.json().catch(() => null);
     if (res.ok && Array.isArray(data)) {
@@ -194,7 +195,13 @@ export async function captureLead(input: CaptureInput): Promise<void> {
   try {
     const res = await fetch(
       `https://${c.host}/v2/LeadManagement.svc/Lead.Capture?accessKey=${c.access}&secretKey=${c.secret}`,
-      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(safeAttrs) },
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(safeAttrs),
+        // The lead route awaits this — a slow LSQ must not hang form submits.
+        signal: AbortSignal.timeout(8000),
+      },
     );
     if (!res.ok) console.error("[lsq] capture failed:", res.status, await res.text().catch(() => ""));
   } catch (err) {
@@ -226,6 +233,7 @@ async function findProspectId(
   if (opts.phone) {
     const res = await fetch(
       `https://${c.host}/v2/LeadManagement.svc/RetrieveLeadByPhoneNumber?accessKey=${c.access}&secretKey=${c.secret}&phone=${encodeURIComponent(opts.phone)}`,
+      { signal: AbortSignal.timeout(8000) },
     );
     const data = await res.json().catch(() => null);
     if (res.ok && Array.isArray(data) && data.length > 0) return data[0].ProspectID ?? null;
@@ -233,6 +241,7 @@ async function findProspectId(
   if (opts.email) {
     const res = await fetch(
       `https://${c.host}/v2/LeadManagement.svc/RetrieveLeadByEmailAddress?accessKey=${c.access}&secretKey=${c.secret}&emailaddress=${encodeURIComponent(opts.email)}`,
+      { signal: AbortSignal.timeout(8000) },
     );
     const data = await res.json().catch(() => null);
     if (res.ok && Array.isArray(data) && data.length > 0) return data[0].ProspectID ?? null;
@@ -349,7 +358,12 @@ export async function updateLeadPostChat(opts: {
     if (!safe.length) return;
     const res = await fetch(
       `https://${c.host}/v2/LeadManagement.svc/Lead.Update?accessKey=${c.access}&secretKey=${c.secret}&leadId=${prospectId}`,
-      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(safe) },
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(safe),
+        signal: AbortSignal.timeout(8000),
+      },
     );
     if (!res.ok) console.error("[lsq] post-chat update failed:", res.status, await res.text().catch(() => ""));
   } catch (err) {
@@ -390,6 +404,7 @@ export async function tagLeadScore(opts: {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(tagAttrs),
+        signal: AbortSignal.timeout(8000),
       },
     );
   } catch (err) {

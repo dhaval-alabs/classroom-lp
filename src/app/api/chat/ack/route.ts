@@ -8,8 +8,10 @@ async function callGemini(prompt: string): Promise<string> {
   if (!apiKey) throw new Error("GEMINI_API_KEY not configured");
   const model = process.env.GEMINI_MODEL ?? "gemini-3.5-flash";
 
+  // The client gives up at 2.5s and shows a canned ack instead — anything
+  // slower than this is wasted work, so fail fast.
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 8000);
+  const timeout = setTimeout(() => controller.abort(), 3500);
   try {
     const res = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,

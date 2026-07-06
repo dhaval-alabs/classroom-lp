@@ -52,17 +52,37 @@ export default function QualificationChat({ leadId, name }: QualificationChatPro
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages]);
 
+  // Instant fallbacks when the AI ack isn't back within the deadline — the chat
+  // must never feel stuck between questions.
+  const CANNED_ACKS = [
+    "Got it, thanks!",
+    "Noted — that really helps.",
+    "Perfect, thanks for sharing.",
+    "Great, that helps us match the right counsellor.",
+    "Understood!",
+    "Thanks — good to know.",
+    "Noted!",
+    "That's helpful, thank you.",
+  ];
+
+  // Ask Gemini for a personalised ack but give it a hard 2.5s budget; past
+  // that we show a canned line instead. Slow AI must never block the flow.
   async function fetchAck(question: string, answer: string, qIndex: number): Promise<string> {
+    const controller = new AbortController();
+    const deadline = setTimeout(() => controller.abort(), 2500);
     try {
       const res = await fetch("/api/chat/ack", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ question, answer, questionIndex: qIndex }),
+        signal: controller.signal,
       });
       const data = (await res.json()) as { ack?: string };
-      return data.ack?.trim() ?? "";
+      return data.ack?.trim() || CANNED_ACKS[qIndex % CANNED_ACKS.length];
     } catch {
-      return "";
+      return CANNED_ACKS[qIndex % CANNED_ACKS.length];
+    } finally {
+      clearTimeout(deadline);
     }
   }
 
@@ -125,26 +145,27 @@ export default function QualificationChat({ leadId, name }: QualificationChatPro
         callChoice.current.date && callChoice.current.slot
           ? { date: callChoice.current.date, slot: callChoice.current.slot }
           : undefined;
-      try {
-        await fetch("/api/qualify", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ leadId, conversation, meta, crmFields, preferredCall }),
-        });
-      } catch {
+      // Fire-and-forget ON THE CLIENT (the browser keeps the request alive —
+      // keepalive even survives a tab close). Scoring + CRM sync take 10–60s
+      // server-side; the user must not stare at "···" while that runs.
+      fetch("/api/qualify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ leadId, conversation, meta, crmFields, preferredCall }),
+        keepalive: true,
+      }).catch(() => {
         // silent — qualification is non-blocking
-      } finally {
-        setIsComplete(true);
-        setMessages((prev) => [
-          ...prev,
-          {
-            role: "assistant",
-            content:
-              "Thank you! 🎉 You're all set — our counsellor will call you shortly with everything personalised to what you've shared.",
-          },
-        ]);
-        setIsSubmitting(false);
-      }
+      });
+      setIsComplete(true);
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content:
+            "Thank you! 🎉 You're all set — our counsellor will call you shortly with everything personalised to what you've shared.",
+        },
+      ]);
+      setIsSubmitting(false);
     }
   }
 
