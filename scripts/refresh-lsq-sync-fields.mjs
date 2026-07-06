@@ -49,12 +49,19 @@ const maxLen = (schema, fallback) => {
 };
 const URL_MAX = maxLen("mx_Page_Url", 256);
 const NOTES_MAX = maxLen("mx_Extra_Notes", 256);
-console.log(`Field limits from LSQ metadata: mx_Page_Url=${URL_MAX}, mx_Extra_Notes=${NOTES_MAX}`);
+// Verified/Unverified dedicated field — only synced once it exists in LSQ.
+const VERIFIED_FIELD = process.env.LSQ_VERIFIED_FIELD || "mx_Lead_Verified";
+const VERIFIED_EXISTS = Array.isArray(meta) && meta.some((f) => f.SchemaName === VERIFIED_FIELD);
+console.log(
+  `Field limits from LSQ metadata: mx_Page_Url=${URL_MAX}, mx_Extra_Notes=${NOTES_MAX}; ${VERIFIED_FIELD}: ${VERIFIED_EXISTS ? "exists" : "absent (skipped)"}`,
+);
 
-// Same notes shape/order as src/lib/leadsquared.ts (short fields first — they
-// must survive the truncation; the long URL goes last).
+// Same notes shape/order as buildLeadNotes in src/lib/leadsquared.ts (status
+// first, then short fields — they must survive the truncation; the long URL
+// goes last). Verified = completed the qualification chat (status "qualified").
 function buildNotes(l) {
   return [
+    `Status: ${l.status === "qualified" ? "Verified" : "Unverified"}`,
     l.course && `Course: ${l.course}`,
     l.city && `City: ${l.city}`,
     l.background && `Profile: ${l.background}`,
@@ -68,7 +75,7 @@ function buildNotes(l) {
 }
 
 const sbRes = await fetch(
-  `${SB_URL}/rest/v1/classroom_leads?select=full_name,phone,page_url,course,city,background,consent,message,gclid,created_at&phone=not.is.null&order=created_at.asc`,
+  `${SB_URL}/rest/v1/classroom_leads?select=full_name,phone,page_url,course,city,background,consent,message,gclid,status,created_at&phone=not.is.null&order=created_at.asc`,
   { headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, "Accept-Profile": "classroom_landingpage" } },
 );
 const leads = await sbRes.json();
@@ -110,6 +117,10 @@ for (const lead of leads) {
     if (notes) {
       const target = notes.slice(0, NOTES_MAX);
       if ((rec.mx_Extra_Notes || "") !== target) attrs.push({ Attribute: "mx_Extra_Notes", Value: target });
+    }
+    if (VERIFIED_EXISTS) {
+      const target = lead.status === "qualified" ? "Verified" : "Unverified";
+      if ((rec[VERIFIED_FIELD] || "") !== target) attrs.push({ Attribute: VERIFIED_FIELD, Value: target });
     }
     if (!attrs.length) {
       ok++;

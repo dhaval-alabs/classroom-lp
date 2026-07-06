@@ -1,13 +1,23 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import { trackLockSeat } from "@/components/Analytics";
 import { newEventId, readFbCookies } from "@/lib/metaClient";
-import { LOCK_SEAT_ANSWER, QUESTIONS, QUESTION_OPTIONS, QUESTION_FIELD } from "@/lib/chatFlow";
+import {
+  LOCK_SEAT_ANSWER,
+  QUESTIONS,
+  QUESTION_OPTIONS,
+  QUESTION_FIELD,
+  DAY_QUESTION_INDEX,
+  TIME_QUESTION_INDEX,
+  callDayOptions,
+} from "@/lib/chatFlow";
 
 interface Message {
   role: "assistant" | "user";
   content: string;
+  /** true when the user picked a quick-reply chip; scoring treats taps as weak evidence */
+  tapped?: boolean;
 }
 
 interface QualificationChatProps {
@@ -32,6 +42,10 @@ export default function QualificationChat({ leadId, name }: QualificationChatPro
   const containerRef = useRef<HTMLDivElement>(null);
   // Accumulates answers to LSQ-mapped questions → { schemaName: answer }.
   const crmAnswers = useRef<Record<string, string>>({});
+  // Preferred counsellor-call day+slot (set only via chips, so the values are structured).
+  const callChoice = useRef<{ date?: string; slot?: string }>({});
+  // Day chips carry real dates, so they're generated once per mount.
+  const dayOptions = useMemo(() => callDayOptions(new Date()), []);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -56,7 +70,8 @@ export default function QualificationChat({ leadId, name }: QualificationChatPro
     const trimmed = (directText ?? input).trim();
     if (!trimmed || isSubmitting || isComplete) return;
 
-    const userMsg: Message = { role: "user", content: trimmed };
+    const tapped = directText !== undefined;
+    const userMsg: Message = { role: "user", content: trimmed, tapped };
     const updated = [...messages, userMsg];
     setMessages(updated);
     if (!directText) setInput("");
@@ -65,8 +80,16 @@ export default function QualificationChat({ leadId, name }: QualificationChatPro
     // Record this answer if it belongs to an LSQ-mapped question (the server
     // allowlist drops anything that isn't an exact dropdown value, so typed
     // custom answers are simply ignored for the CRM field).
-    const answeredField = QUESTION_FIELD[questionIndex - 1];
+    const answeredIndex = questionIndex - 1;
+    const answeredField = QUESTION_FIELD[answeredIndex];
     if (answeredField) crmAnswers.current[answeredField] = trimmed;
+    // Day/time chips carry structured values for the counsellor-call fields.
+    // Typed answers still land in the transcript, just not the CRM date fields.
+    if (tapped && answeredIndex === DAY_QUESTION_INDEX) {
+      const day = dayOptions.find((d) => d.label === trimmed);
+      if (day) callChoice.current.date = day.iso;
+    }
+    if (tapped && answeredIndex === TIME_QUESTION_INDEX) callChoice.current.slot = trimmed;
 
     // Only Q&A pairs get scored — drop the intro/UI-only messages.
     const conversation = updated.filter((m) => m.role === "user" || QUESTIONS.includes(m.content));
@@ -98,11 +121,15 @@ export default function QualificationChat({ leadId, name }: QualificationChatPro
         };
       }
       const crmFields = Object.entries(crmAnswers.current).map(([Attribute, Value]) => ({ Attribute, Value }));
+      const preferredCall =
+        callChoice.current.date && callChoice.current.slot
+          ? { date: callChoice.current.date, slot: callChoice.current.slot }
+          : undefined;
       try {
         await fetch("/api/qualify", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ leadId, conversation, meta, crmFields }),
+          body: JSON.stringify({ leadId, conversation, meta, crmFields, preferredCall }),
         });
       } catch {
         // silent — qualification is non-blocking
@@ -163,10 +190,13 @@ export default function QualificationChat({ leadId, name }: QualificationChatPro
         )}
       </div>
 
-      {/* quick-reply options */}
+      {/* quick-reply options (day question gets real dates) */}
       {!isComplete && !isSubmitting && QUESTION_OPTIONS[questionIndex - 1] && (
         <div className="mb-3 flex flex-wrap gap-2">
-          {QUESTION_OPTIONS[questionIndex - 1].map((opt) => (
+          {(questionIndex - 1 === DAY_QUESTION_INDEX
+            ? dayOptions.map((d) => d.label)
+            : QUESTION_OPTIONS[questionIndex - 1]
+          ).map((opt) => (
             <button
               key={opt}
               type="button"

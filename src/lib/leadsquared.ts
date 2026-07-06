@@ -101,18 +101,25 @@ export type CaptureInput = {
  * field schema names that may not exist. Unknown fields are filtered out before
  * sending (see keepExistingFields).
  */
-export async function captureLead(input: CaptureInput): Promise<void> {
-  const c = cfg();
-  if (!c) return;
+/**
+ * The Notes blob shown to counsellors. Status (Verified = completed the
+ * qualification chat, Unverified = form only) comes first; LSQ stores
+ * mx_Extra_Notes truncated to 256 chars, so short high-value fields go before
+ * the long ad URL (which lives in full in mx_Page_Url anyway).
+ */
+export type LeadNotesInput = {
+  course?: string | null;
+  city?: string | null;
+  background?: string | null;
+  consent?: boolean | null;
+  message?: string | null;
+  gclid?: string | null;
+  page_url?: string | null;
+};
 
-  const { first, last } = splitName(input.full_name);
-  const notesField = process.env.LSQ_NOTES_FIELD_NAME || "mx_Extra_Notes";
-  const fbclidField = process.env.LSQ_FBCLID_FIELD || "mx_FBCLID";
-
-  // LSQ stores mx_Extra_Notes truncated to 256 chars, so short high-value
-  // fields go first and the long ad URL goes last (it lives in full in
-  // mx_Page_Url anyway).
+export function buildLeadNotes(input: LeadNotesInput & { verified: boolean }): string {
   let notes = [
+    `Status: ${input.verified ? "Verified" : "Unverified"}`,
     input.course && `Course: ${input.course}`,
     input.city && `City: ${input.city}`,
     input.background && `Profile: ${input.background}`,
@@ -123,8 +130,27 @@ export async function captureLead(input: CaptureInput): Promise<void> {
   ]
     .filter(Boolean)
     .join(" | ");
-  // mx_Notes can be long once a free-text message is included; keep it bounded.
   if (notes.length > 2000) notes = notes.slice(0, 1990) + "…";
+  return notes;
+}
+
+// Verified/Unverified also goes to a dedicated field. mx_Lead_Verified doesn't
+// exist yet — the existence filter drops it harmlessly until an admin creates
+// it (Text, or Select with exactly "Verified" and "Unverified"), after which it
+// starts flowing automatically. Override the name via LSQ_VERIFIED_FIELD.
+const verifiedField = () => process.env.LSQ_VERIFIED_FIELD || "mx_Lead_Verified";
+
+export async function captureLead(input: CaptureInput): Promise<void> {
+  const c = cfg();
+  if (!c) return;
+
+  const { first, last } = splitName(input.full_name);
+  const notesField = process.env.LSQ_NOTES_FIELD_NAME || "mx_Extra_Notes";
+  const fbclidField = process.env.LSQ_FBCLID_FIELD || "mx_FBCLID";
+
+  // A fresh form submit is always Unverified — the chat hasn't happened yet.
+  // updateLeadPostChat flips it to Verified when the chat completes.
+  const notes = buildLeadNotes({ ...input, verified: false });
 
   const attrs: LsqAttr[] = [
     { Attribute: "FirstName", Value: first },
@@ -161,6 +187,7 @@ export async function captureLead(input: CaptureInput): Promise<void> {
   for (const [field, value] of dedicated) {
     if (field && value) attrs.push({ Attribute: field, Value: value });
   }
+  attrs.push({ Attribute: verifiedField(), Value: "Unverified" });
   if (notes) attrs.push({ Attribute: notesField, Value: notes });
 
   const safeAttrs = await keepExistingFields(c, attrs);
@@ -241,35 +268,92 @@ const ALLOWED_CHAT_FIELDS: Record<string, ReadonlySet<string>> = {
   ]),
 };
 
+const SLOT_START_HOUR_IST: Record<string, number> = {
+  "10 AM – 12 PM": 10,
+  "12 – 3 PM": 12,
+  "3 – 6 PM": 15,
+  "6 – 8 PM": 18,
+};
+
 /**
- * Push structured chat answers (career goal / enrol intent / preferred call
- * time) to their LSQ Select fields. Filtered against ALLOWED_CHAT_FIELDS so only
- * known field+value pairs are ever sent. Best-effort — never throws.
+ * Validate the chip-picked counsellor-call day+slot and turn it into LSQ attrs:
+ * a human-readable text field, LSQ's Date field (UTC), and the derived
+ * "Preferred Counseling Time" dropdown. Returns [] when the input isn't a
+ * clean chip value (typed answers still live in the transcript).
  */
-export async function updateLeadCrmFields(opts: {
+export function buildPreferredCallAttrs(
+  preferredCall: { date?: string; slot?: string } | undefined,
+  now: Date = new Date(),
+): LsqAttr[] {
+  if (!preferredCall?.date || !preferredCall.slot) return [];
+  const { date, slot } = preferredCall;
+  const startHour = SLOT_START_HOUR_IST[slot];
+  if (startHour === undefined || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return [];
+
+  const todayIst = now.toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+  const diffDays = Math.round((Date.parse(date) - Date.parse(todayIst)) / 86400000);
+  if (Number.isNaN(diffDays) || diffDays < 0 || diffDays > 14) return [];
+
+  // Slot start in IST → UTC, formatted the way LSQ Date fields store values.
+  const startUtc = new Date(`${date}T${String(startHour).padStart(2, "0")}:00:00+05:30`);
+  const dayLabel = startUtc.toLocaleDateString("en-IN", {
+    timeZone: "Asia/Kolkata",
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+  const connectBucket =
+    diffDays <= 0 ? "Immediately" : diffDays <= 3 ? "Within 3 days" : diffDays <= 7 ? "Within 7  days" : "Within 30 days";
+
+  return [
+    { Attribute: "mx_Preferred_Date_Time", Value: `${dayLabel} — ${slot} IST` },
+    { Attribute: "mx_Preferred_Date_And_Time", Value: startUtc.toISOString().slice(0, 19).replace("T", " ") },
+    { Attribute: "mx_connect_to_counselling", Value: connectBucket },
+  ];
+}
+
+/**
+ * One consolidated Lead.Update when the qualification chat completes:
+ * - flips the lead to Verified (dedicated field + Status: prefix in Notes)
+ * - writes the preferred counsellor-call day/slot fields
+ * - writes the allowlisted dropdown answers from the chat
+ * Client-supplied fields go through ALLOWED_CHAT_FIELDS; everything else is
+ * composed server-side. Best-effort — never throws.
+ */
+export async function updateLeadPostChat(opts: {
   phone?: string | null;
   email?: string | null;
-  fields: LsqAttr[];
+  clientFields?: LsqAttr[];
+  preferredCall?: { date?: string; slot?: string };
+  lead: LeadNotesInput;
 }): Promise<void> {
   const c = cfg();
   if (!c) return;
-  const safe = opts.fields.filter((f) => ALLOWED_CHAT_FIELDS[f.Attribute]?.has(f.Value));
-  if (!safe.length) return;
+  const notesField = process.env.LSQ_NOTES_FIELD_NAME || "mx_Extra_Notes";
+
+  const attrs: LsqAttr[] = [
+    ...(opts.clientFields ?? []).filter((f) => ALLOWED_CHAT_FIELDS[f.Attribute]?.has(f.Value)),
+    ...buildPreferredCallAttrs(opts.preferredCall),
+    { Attribute: verifiedField(), Value: "Verified" },
+    { Attribute: notesField, Value: buildLeadNotes({ ...opts.lead, verified: true }) },
+  ];
+
   try {
     const prospectId = await findProspectId(c, opts);
     if (!prospectId) {
-      console.warn("[lsq] lead not found — chat fields not set");
+      console.warn("[lsq] lead not found — post-chat update skipped");
       return;
     }
-    const attrs = await keepExistingFields(c, safe);
-    if (!attrs.length) return;
+    const safe = await keepExistingFields(c, attrs);
+    if (!safe.length) return;
     const res = await fetch(
       `https://${c.host}/v2/LeadManagement.svc/Lead.Update?accessKey=${c.access}&secretKey=${c.secret}&leadId=${prospectId}`,
-      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(attrs) },
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(safe) },
     );
-    if (!res.ok) console.error("[lsq] chat fields update failed:", res.status, await res.text().catch(() => ""));
+    if (!res.ok) console.error("[lsq] post-chat update failed:", res.status, await res.text().catch(() => ""));
   } catch (err) {
-    console.error("[lsq] chat fields error:", err);
+    console.error("[lsq] post-chat update error:", err);
   }
 }
 

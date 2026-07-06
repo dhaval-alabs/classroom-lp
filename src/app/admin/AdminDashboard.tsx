@@ -367,7 +367,13 @@ export default function AdminDashboard() {
                         <div className="text-xs text-slate-400">{l.city ?? ""}</div>
                       </td>
                       <td className="px-4 py-3"><ScoreBadge score={l.lead_score} /></td>
-                      <td className="px-4 py-3 text-xs font-medium uppercase text-muted">{l.status ?? "new"}</td>
+                      <td className="px-4 py-3 text-xs font-medium uppercase">
+                        {l.status === "qualified" ? (
+                          <span className="text-emerald-600">Verified</span>
+                        ) : (
+                          <span className="text-muted">Unverified</span>
+                        )}
+                      </td>
                       <td className="px-4 py-3 text-right">
                         {hasDetail && (
                           <button

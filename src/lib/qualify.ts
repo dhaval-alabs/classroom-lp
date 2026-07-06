@@ -6,6 +6,8 @@ export type LeadScore = "hot" | "warm" | "cold" | "junk";
 export interface ConversationTurn {
   role: "assistant" | "user";
   content: string;
+  /** true when the answer was a quick-reply chip tap (weak intent evidence) */
+  tapped?: boolean;
 }
 
 /** Form fields passed alongside the chat so scoring can judge identity quality. */
@@ -128,12 +130,14 @@ export async function scoreConversation(
   if (!apiKey) throw new Error("GEMINI_API_KEY not configured");
 
   // Mark one-tap answers so the model can separate low-effort run-throughs
-  // from typed engagement (a key predictor of reachability).
+  // from typed engagement (a key predictor of reachability). The client sends
+  // `tapped` per turn; fall back to preset matching for older payloads (day
+  // chips carry dynamic dates that aren't in the static preset set).
   const transcript = conversation
     .map((m) =>
       m.role === "assistant"
         ? `Counsellor: ${m.content}`
-        : `Prospect: ${m.content}${ALL_PRESET_ANSWERS.has(m.content.trim()) ? " (tapped preset)" : " (typed)"}`,
+        : `Prospect: ${m.content}${(m.tapped ?? ALL_PRESET_ANSWERS.has(m.content.trim())) ? " (tapped preset)" : " (typed)"}`,
     )
     .join("\n");
 

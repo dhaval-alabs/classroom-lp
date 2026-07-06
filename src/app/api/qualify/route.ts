@@ -7,7 +7,7 @@ import {
   type LeadContext,
 } from "@/lib/qualify";
 import { getServiceClient, isSupabaseConfigured } from "@/lib/supabase";
-import { tagLeadScore, updateLeadCrmFields, lsqConfigured } from "@/lib/leadsquared";
+import { tagLeadScore, updateLeadPostChat, lsqConfigured } from "@/lib/leadsquared";
 import { sendMetaCapiEvent, extractClientContext, isMetaCapiConfigured } from "@/lib/meta";
 
 export const runtime = "nodejs";
@@ -74,6 +74,8 @@ export async function POST(req: NextRequest) {
       meta?: { event_id?: string; event_source_url?: string; fbp?: string; fbc?: string };
       // Structured chat answers → LSQ Select fields. Allowlisted server-side.
       crmFields?: Array<{ Attribute?: string; Value?: string }>;
+      // Chip-picked counsellor-call day + slot; validated server-side.
+      preferredCall?: { date?: string; slot?: string };
     };
     const { leadId, conversation } = body;
 
@@ -92,15 +94,20 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // One lead fetch, reused by scoring (identity signals), the LSQ dropdown
-    // sync and the LSQ score tag below.
-    let lead: LeadContext | null = null;
+    // One lead fetch, reused by scoring (identity signals), the LSQ post-chat
+    // update (verified flag + notes rebuild) and the LSQ score tag below.
+    type LeadRow = LeadContext & {
+      consent?: boolean | null;
+      gclid?: string | null;
+      page_url?: string | null;
+    };
+    let lead: LeadRow | null = null;
     if (leadId && isSupabaseConfigured()) {
       const sb = getServiceClient();
       if (sb) {
         const { data } = await sb
           .from("classroom_leads")
-          .select("full_name,phone,email,course,city,background,message")
+          .select("full_name,phone,email,course,city,background,message,consent,gclid,page_url")
           .eq("id", leadId)
           .single();
         lead = data ?? null;
@@ -123,17 +130,25 @@ export async function POST(req: NextRequest) {
       if (isMetaCapiConfigured()) await fireLockSeatCapi(req, leadId, body.meta);
     }
 
-    // Push the structured chat answers (career goal / enrol intent / call time)
-    // to their LSQ dropdown fields. Allowlisted inside updateLeadCrmFields, so a
-    // crafted request can't set arbitrary fields. Best-effort; never blocks.
-    if (Array.isArray(body.crmFields) && body.crmFields.length && lead && lsqConfigured()) {
-      const fields = body.crmFields
+    // Reaching this endpoint means the chat completed → the lead is Verified.
+    // One consolidated LSQ update: Verified flag + rebuilt notes + preferred
+    // counsellor-call day/slot + allowlisted dropdown answers (a crafted request
+    // can't set arbitrary fields — client values pass an exact allowlist and the
+    // call fields are composed server-side from a validated date+slot).
+    if (lead && lsqConfigured()) {
+      const clientFields = (Array.isArray(body.crmFields) ? body.crmFields : [])
         .filter((f): f is { Attribute: string; Value: string } => Boolean(f?.Attribute && f?.Value))
         .map((f) => ({ Attribute: f.Attribute, Value: f.Value }));
       try {
-        await updateLeadCrmFields({ phone: lead.phone, email: lead.email, fields });
+        await updateLeadPostChat({
+          phone: lead.phone,
+          email: lead.email,
+          clientFields,
+          preferredCall: body.preferredCall,
+          lead,
+        });
       } catch (e) {
-        console.error("[qualify] LSQ chat fields failed:", e);
+        console.error("[qualify] LSQ post-chat update failed:", e);
       }
     }
 
