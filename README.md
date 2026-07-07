@@ -1,8 +1,13 @@
 # AnalytixLabs — Offline Classroom Batch Landing Page
 
-A fast, conversion-optimized Next.js landing page for paid (Meta + Google) ad
-traffic. Captures leads for in-person Data Science & AI classroom batches into
-Supabase, with built-in Meta Pixel / Google Ads / GA4 conversion tracking.
+A fast, conversion-optimized Next.js landing page for paid **Meta** ad traffic
+(Meta-only for now). Captures leads for in-person Data Science & AI classroom
+batches into Supabase, with built-in Meta Pixel + GA4 conversion tracking.
+
+> **Note:** Google Ads tracking code exists in the repo (see
+> `src/components/Analytics.tsx`) but is currently **disabled / commented out**
+> — grep `GOOGLE ADS — DISABLED`. This LP runs Meta-only; re-enable the
+> commented Google Ads code in one pass if that ever changes.
 
 ## Stack
 - Next.js 15 (App Router) + React 19 + TypeScript
