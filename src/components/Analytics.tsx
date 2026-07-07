@@ -11,7 +11,17 @@ import Script from "next/script";
  */
 
 const PIXEL_ID = process.env.NEXT_PUBLIC_META_PIXEL_ID;
-const GADS_ID = process.env.NEXT_PUBLIC_GOOGLE_ADS_ID;
+// ────────────────────────────────────────────────────────────
+// GOOGLE ADS — DISABLED (commented out, not deleted)
+// This app is Meta-only for now (Meta Pixel + GA4 stay active). The
+// Google Ads pieces were inherited from the careersuccess fork and are
+// currently inert (env vars unset in production). Commented out rather
+// than removed so Google Ads support can be re-enabled quickly if this
+// campaign is ever extended to Google Ads. Do not uncomment without
+// confirming the relevant AW-.../label conversion action is correctly
+// configured and intended for THIS app specifically.
+// ────────────────────────────────────────────────────────────
+// const GADS_ID = process.env.NEXT_PUBLIC_GOOGLE_ADS_ID;
 const GA4_ID = process.env.NEXT_PUBLIC_GA4_ID;
 
 declare global {
@@ -35,10 +45,17 @@ export function trackLead(eventId?: string) {
     else window.fbq?.("trackCustom", "lead_classroom");
   } catch {}
   try {
-    const label = process.env.NEXT_PUBLIC_GOOGLE_ADS_LEAD_LABEL;
-    if (window.gtag && GADS_ID && label) {
-      window.gtag("event", "conversion", { send_to: `${GADS_ID}/${label}` });
-    }
+    // ────────────────────────────────────────────────────────────
+    // GOOGLE ADS — DISABLED (commented out, not deleted)
+    // Meta-only for now; inherited from the careersuccess fork and inert
+    // (env vars unset in production). Re-enable in one pass if this
+    // campaign is ever extended to Google Ads. The generate_lead event
+    // below is GA4 (not Google Ads) and stays active.
+    // ────────────────────────────────────────────────────────────
+    // const label = process.env.NEXT_PUBLIC_GOOGLE_ADS_LEAD_LABEL;
+    // if (window.gtag && GADS_ID && label) {
+    //   window.gtag("event", "conversion", { send_to: `${GADS_ID}/${label}` });
+    // }
     window.gtag?.("event", "generate_lead", { value: 1 });
   } catch {}
 }
@@ -57,7 +74,9 @@ export function trackLockSeat(eventId?: string) {
 }
 
 export default function Analytics() {
-  const gtagId = GADS_ID || GA4_ID;
+  // GOOGLE ADS — DISABLED: was `GADS_ID || GA4_ID`. GA4 alone now drives the
+  // shared gtag.js loader so an AW- id can never auto-init the Google Ads tag.
+  const gtagId = GA4_ID;
 
   return (
     <>
@@ -98,7 +117,7 @@ export default function Analytics() {
             {`window.dataLayer=window.dataLayer||[];
             function gtag(){dataLayer.push(arguments);}
             gtag('js',new Date());
-            ${GADS_ID ? `gtag('config','${GADS_ID}');` : ""}
+            ${/* GOOGLE ADS — DISABLED: removed gtag('config','<GADS_ID>') so the Ads tag is never configured. GA4 config below stays active. */ ""}
             ${GA4_ID ? `gtag('config','${GA4_ID}');` : ""}`}
           </Script>
         </>
