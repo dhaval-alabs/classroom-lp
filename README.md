@@ -1,8 +1,12 @@
 # AnalytixLabs — Offline Classroom Batch Landing Page
 
-A fast, conversion-optimized Next.js landing page for paid (Meta + Google) ad
-traffic. Captures leads for in-person Data Science & AI classroom batches into
-Supabase, with built-in Meta Pixel / Google Ads / GA4 conversion tracking.
+A fast, conversion-optimized Next.js landing page for paid **Meta-only** ad
+traffic (currently). Captures leads for in-person Data Science & AI classroom
+batches into Supabase, with built-in Meta Pixel / GA4 conversion tracking.
+Google Ads conversion-tracking code exists (inherited from the `careersuccess`
+fork this app started from) but is **commented out** in
+`src/components/Analytics.tsx` — see the marker comment there before
+re-enabling it.
 
 ## Stack
 - Next.js 15 (App Router) + React 19 + TypeScript
@@ -75,9 +79,11 @@ Qualification logic lives in `src/lib/qualify.ts`.
 ## Configure conversion tracking (optional)
 Set any of these in `.env.local` — blank tags are skipped automatically:
 - `NEXT_PUBLIC_META_PIXEL_ID` — fires `PageView` on load + `Lead` on submit.
-- `NEXT_PUBLIC_GOOGLE_ADS_ID` + `NEXT_PUBLIC_GOOGLE_ADS_LEAD_LABEL` — fires the
-  Google Ads conversion on submit.
 - `NEXT_PUBLIC_GA4_ID` — page views + a `generate_lead` event on submit.
+- `NEXT_PUBLIC_GOOGLE_ADS_ID` + `NEXT_PUBLIC_GOOGLE_ADS_LEAD_LABEL` — **disabled.**
+  This app is Meta-only for now; the Google Ads conversion call is commented
+  out in `src/components/Analytics.tsx` (search for `GOOGLE ADS — DISABLED`).
+  Setting these env vars currently has no effect — uncomment that code first.
 
 The conversion event fires only on a **confirmed** successful submission
 (see `trackLead()` in `src/components/Analytics.tsx`).

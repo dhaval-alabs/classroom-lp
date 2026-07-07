@@ -34,11 +34,23 @@ export function trackLead(eventId?: string) {
     if (eventId) window.fbq?.("trackCustom", "lead_classroom", {}, { eventID: eventId });
     else window.fbq?.("trackCustom", "lead_classroom");
   } catch {}
+  // ─────────────────────────────────────────────────────────────
+  // GOOGLE ADS — DISABLED (commented out, not deleted)
+  // This repo/app is Meta-only for now. This code was inherited
+  // from the careersuccess (Google Ads) fork and is currently inert
+  // (env vars unset in production). Commented out rather than removed
+  // so Google Ads support can be re-enabled quickly if this campaign
+  // is ever extended to Google Ads. Do not uncomment without confirming
+  // the relevant AW-.../label conversion action is correctly configured
+  // and intended for THIS app specifically.
+  // ─────────────────────────────────────────────────────────────
+  // try {
+  //   const label = process.env.NEXT_PUBLIC_GOOGLE_ADS_LEAD_LABEL;
+  //   if (window.gtag && GADS_ID && label) {
+  //     window.gtag("event", "conversion", { send_to: `${GADS_ID}/${label}` });
+  //   }
+  // } catch {}
   try {
-    const label = process.env.NEXT_PUBLIC_GOOGLE_ADS_LEAD_LABEL;
-    if (window.gtag && GADS_ID && label) {
-      window.gtag("event", "conversion", { send_to: `${GADS_ID}/${label}` });
-    }
     window.gtag?.("event", "generate_lead", { value: 1 });
   } catch {}
 }
@@ -58,6 +70,18 @@ export function trackLockSeat(eventId?: string) {
 
 export default function Analytics() {
   const gtagId = GADS_ID || GA4_ID;
+  // ─────────────────────────────────────────────────────────────
+  // GOOGLE ADS — DISABLED (commented out, not deleted)
+  // This repo/app is Meta-only for now. This code was inherited
+  // from the careersuccess (Google Ads) fork and is currently inert
+  // (env vars unset in production). Commented out rather than removed
+  // so Google Ads support can be re-enabled quickly if this campaign
+  // is ever extended to Google Ads. Do not uncomment without confirming
+  // the relevant AW-.../label conversion action is correctly configured
+  // and intended for THIS app specifically.
+  // ─────────────────────────────────────────────────────────────
+  // const gadsConfigLine = GADS_ID ? `gtag('config','${GADS_ID}');` : "";
+  const gadsConfigLine = "";
 
   return (
     <>
@@ -98,7 +122,7 @@ export default function Analytics() {
             {`window.dataLayer=window.dataLayer||[];
             function gtag(){dataLayer.push(arguments);}
             gtag('js',new Date());
-            ${GADS_ID ? `gtag('config','${GADS_ID}');` : ""}
+            ${gadsConfigLine}
             ${GA4_ID ? `gtag('config','${GA4_ID}');` : ""}`}
           </Script>
         </>
