@@ -57,31 +57,43 @@ function isAuthorized(req: NextRequest): boolean {
 // ── source_class stamp (Jul-9 architecture note, decision #2) ──────────────
 const SOURCE_CLASS = "social";
 
-// ── LSQ stage → Meta event mapping — same as masterclass, kept in sync
-// manually until Phase 1.9 unifies the trunk. SQL stage list reuses the
-// Google relay's mapping pending Sabrish's sign-off.
-const SQL_STAGES = new Set(["enquiry", "re-enquiry", "hot", "warm", "priority-call"]);
+// ── LSQ stage → Meta event mapping (V2 — finalised with Sabrish, Jul 20) ──
+// Connected = lower-value social engagement (Enquiry, Re-Enquiry,
+// ML-Enquiry — net-new, previously fired nothing despite being the key
+// social-engagement signal). SalesQualified = higher-value (Hot, Warm,
+// Priority-Call — moved here from Connected per Sabrish's sign-off).
+// Marketing Lead deliberately excluded from both suppression and
+// qualification (ambiguous — used for both fresh and dead social leads,
+// per Sabrish) — falls through to null, same as New Lead. RNR/Not
+// Reachable added as suppression (via Disqualified, still no value) — the
+// only clean dead-lead seeds.
+const CONNECTED_STAGES = new Set(["enquiry", "re-enquiry", "ml-enquiry"]);
+const SALES_QUALIFIED_STAGES = new Set(["hot", "warm", "priority-call"]);
 const DISQUALIFIED_STAGES = new Set([
-  "disqualified", "junk", "cold", "not interested", "marketing lead",
+  "disqualified", "junk", "cold", "not interested",
   "recruitment/hiring candidate", "job role/trainer job role",
   "collaboration/college events", "corporate training", "test",
+  "rnr", "not reachable", // suppression signal, no value — added Jul 20
 ]);
 const ENROLLED_STAGE = "enrolled";
 
-type MetaEventPlan = { eventName: "SalesQualified" | "Disqualified" | "Purchase"; value?: number };
+type MetaEventPlan = { eventName: "Connected" | "SalesQualified" | "Disqualified" | "Purchase"; value?: number };
 
 function mapStageToMetaEvent(stage: string): MetaEventPlan | null {
   const s = (stage || "").trim().toLowerCase();
   if (s === ENROLLED_STAGE) {
-    return { eventName: "Purchase", value: 1 }; // TODO: real value pending Sumeet's sign-off
+    return { eventName: "Purchase" }; // count-only per Sabrish's Jul 20 sign-off — value:1 placeholder dropped
   }
   if (DISQUALIFIED_STAGES.has(s)) {
     return { eventName: "Disqualified" }; // suppression-audience seed only — never value-bearing
   }
-  if (SQL_STAGES.has(s)) {
+  if (SALES_QUALIFIED_STAGES.has(s)) {
     return { eventName: "SalesQualified" };
   }
-  return null;
+  if (CONNECTED_STAGES.has(s)) {
+    return { eventName: "Connected" };
+  }
+  return null; // New Lead, Marketing Lead (deliberately ambiguous)
 }
 
 // ── Source filter — the inverse of the Google relay's SKIP_NON_PPC check ──
