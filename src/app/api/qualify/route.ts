@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse, after } from "next/server";
 import {
   scoreConversation,
   saveConversation,
@@ -12,8 +12,12 @@ import { sendMetaCapiEvent, extractClientContext, isMetaCapiConfigured } from "@
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-// The client fires this request without awaiting it; give the Gemini scoring
-// retries + LSQ syncs room to finish instead of Vercel's ~10s default cap.
+// Vercel cancels a serverless invocation the moment the client disconnects
+// (tab close / navigation) — which happens almost immediately now that the
+// chat shows "Thank you!" without waiting for this request. Gemini scoring +
+// LSQ sync (10-60s) are scheduled via after() below, which the platform
+// guarantees runs to completion regardless of client connection state.
+// maxDuration bounds that guaranteed background work, not the response time.
 export const maxDuration = 60;
 
 const splitName = (full: string): { first: string; last: string } => {
@@ -117,72 +121,75 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // User locked their seat ("Yes, lock my seat!"): flag it for the funnel and
-    // fire the deeper Meta conversion. Independent of Gemini scoring; best-effort.
-    if (body.meta?.event_id && leadId) {
-      const sb = getServiceClient();
-      if (sb && isSupabaseConfigured()) {
-        await sb
-          .from("classroom_leads")
-          .update({ seat_locked: true, updated_at: new Date().toISOString() })
-          .eq("id", leadId)
-          .then(({ error }) => {
-            if (error) console.error("[qualify] seat_locked update failed:", error.message);
+    // Everything below is best-effort background work (seat-lock CAPI, LSQ
+    // sync, Gemini scoring) that can take 10-60s. Scheduled via after() so it
+    // runs to completion even though the client isn't waiting for it — a bare
+    // un-awaited call here would race the response and could get cancelled by
+    // the platform the instant the client disconnects.
+    after(async () => {
+      // User locked their seat ("Yes, lock my seat!"): flag it for the funnel
+      // and fire the deeper Meta conversion. Independent of Gemini scoring.
+      if (body.meta?.event_id && leadId) {
+        const sb = getServiceClient();
+        if (sb && isSupabaseConfigured()) {
+          const { error } = await sb
+            .from("classroom_leads")
+            .update({ seat_locked: true, updated_at: new Date().toISOString() })
+            .eq("id", leadId);
+          if (error) console.error("[qualify] seat_locked update failed:", error.message);
+        }
+        if (isMetaCapiConfigured()) await fireLockSeatCapi(req, leadId, body.meta);
+      }
+
+      // Reaching this endpoint means the chat completed → the lead is Verified.
+      // One consolidated LSQ update: Verified flag + rebuilt notes + preferred
+      // counsellor-call day/slot + allowlisted dropdown answers (a crafted
+      // request can't set arbitrary fields — client values pass an exact
+      // allowlist and the call fields are composed server-side from a
+      // validated date+slot).
+      if (lead && lsqConfigured()) {
+        const clientFields = (Array.isArray(body.crmFields) ? body.crmFields : [])
+          .filter((f): f is { Attribute: string; Value: string } => Boolean(f?.Attribute && f?.Value))
+          .map((f) => ({ Attribute: f.Attribute, Value: f.Value }));
+        try {
+          await updateLeadPostChat({
+            phone: lead.phone,
+            email: lead.email,
+            clientFields,
+            preferredCall: body.preferredCall,
+            lead,
           });
+        } catch (e) {
+          console.error("[qualify] LSQ post-chat update failed:", e);
+        }
       }
-      if (isMetaCapiConfigured()) await fireLockSeatCapi(req, leadId, body.meta);
-    }
 
-    // Reaching this endpoint means the chat completed → the lead is Verified.
-    // One consolidated LSQ update: Verified flag + rebuilt notes + preferred
-    // counsellor-call day/slot + allowlisted dropdown answers (a crafted request
-    // can't set arbitrary fields — client values pass an exact allowlist and the
-    // call fields are composed server-side from a validated date+slot).
-    if (lead && lsqConfigured()) {
-      const clientFields = (Array.isArray(body.crmFields) ? body.crmFields : [])
-        .filter((f): f is { Attribute: string; Value: string } => Boolean(f?.Attribute && f?.Value))
-        .map((f) => ({ Attribute: f.Attribute, Value: f.Value }));
+      // Score only if Gemini is configured.
+      if (!process.env.GEMINI_API_KEY) return;
+
+      let score: string | null = null;
+      let reason = "";
       try {
-        await updateLeadPostChat({
-          phone: lead.phone,
-          email: lead.email,
-          clientFields,
-          preferredCall: body.preferredCall,
-          lead,
-        });
-      } catch (e) {
-        console.error("[qualify] LSQ post-chat update failed:", e);
+        // Form data gives the scorer identity-quality signals (name/email/phone).
+        const result = await scoreConversation(conversation, lead);
+        score = result.score;
+        reason = result.reason;
+        if (leadId) await updateLeadScore(leadId, result.score, result.reason);
+      } catch (err) {
+        console.error("[qualify] scoring failed:", err);
       }
-    }
 
-    // Score only if Gemini is configured; never block completion.
-    if (!process.env.GEMINI_API_KEY) {
-      return NextResponse.json({ success: true, score: null });
-    }
-
-    let score: string | null = null;
-    let reason = "";
-    try {
-      // Form data gives the scorer identity-quality signals (name/email/phone).
-      const result = await scoreConversation(conversation, lead);
-      score = result.score;
-      reason = result.reason;
-      if (leadId) await updateLeadScore(leadId, result.score, result.reason);
-    } catch (err) {
-      console.error("[qualify] scoring failed:", err);
-    }
-
-    // Tag the score + transcript onto the LeadSquared lead — AWAITED so it isn't
-    // dropped when the response returns.
-    if (score && lead && lsqConfigured()) {
-      try {
-        await tagLeadScore({ phone: lead.phone, email: lead.email, score, reason, conversation });
-      } catch (e) {
-        console.error("[qualify] LSQ tag failed:", e);
+      // Tag the score + transcript onto the LeadSquared lead.
+      if (score && lead && lsqConfigured()) {
+        try {
+          await tagLeadScore({ phone: lead.phone, email: lead.email, score, reason, conversation });
+        } catch (e) {
+          console.error("[qualify] LSQ tag failed:", e);
+        }
       }
-    }
+    });
 
-    return NextResponse.json({ success: true, score, reason });
+    return NextResponse.json({ success: true });
   } catch (err) {
     console.error("[qualify] error:", err);
     return NextResponse.json({ error: String(err) }, { status: 500 });

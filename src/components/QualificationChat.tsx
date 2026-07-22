@@ -145,17 +145,20 @@ export default function QualificationChat({ leadId, name }: QualificationChatPro
         callChoice.current.date && callChoice.current.slot
           ? { date: callChoice.current.date, slot: callChoice.current.slot }
           : undefined;
-      // Fire-and-forget ON THE CLIENT (the browser keeps the request alive —
-      // keepalive even survives a tab close). Scoring + CRM sync take 10–60s
-      // server-side; the user must not stare at "···" while that runs.
-      fetch("/api/qualify", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ leadId, conversation, meta, crmFields, preferredCall }),
-        keepalive: true,
-      }).catch(() => {
-        // silent — qualification is non-blocking
-      });
+      // The server responds as soon as the transcript is saved and schedules
+      // Gemini scoring + LSQ sync (10–60s) via Next's after() — guaranteed to
+      // finish server-side even after we show "Thank you" and the user
+      // navigates away. So this only needs a normal await, not a keepalive
+      // fire-and-forget: the response itself is fast.
+      try {
+        await fetch("/api/qualify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ leadId, conversation, meta, crmFields, preferredCall }),
+        });
+      } catch {
+        // silent — the transcript is already saved server-side regardless
+      }
       setIsComplete(true);
       setMessages((prev) => [
         ...prev,
