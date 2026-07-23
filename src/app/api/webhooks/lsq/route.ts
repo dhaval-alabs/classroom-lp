@@ -97,14 +97,24 @@ function mapStageToMetaEvent(stage: string): MetaEventPlan | null {
 }
 
 // ── Source filter — the inverse of the Google relay's SKIP_NON_PPC check ──
-// VERIFY the prefix list against real production Source values before
-// relying on it fully — inferred from live relay-log observations, not
-// exhaustively confirmed against every classroom-lp source tag in use.
-const META_SOURCE_PREFIXES = ["ppc-sm", "meta"];
+// LSQ's Lead Stage Change webhook is account-wide — it does NOT filter by
+// property at the subscription level. Without this filter, Google Ads leads
+// would get Meta CAPI events and a 'social' mislabel.
+//
+// ⚠️ WIDENED Jul 23 — confirmed via live LSQ data that "ppc-sm"/"meta" alone
+// missed real, current Meta traffic: found live leads with Source="Facebook
+// Ads" (several sitting in ML-Enquiry — exactly the stage V2 calls out as
+// the key social-engagement signal) and Source="Instagram" (created this
+// month), both silently skipped as not_meta_sourced until now. Switched from
+// prefix-only (startsWith) to substring matching (includes), mirroring the
+// channel-detection regex already proven out in classroom-lp's own admin
+// dashboard (/meta|facebook|fb|instagram/). Still not guaranteed exhaustive —
+// re-check if a genuine Meta source is ever found NOT matching this list.
+const META_SOURCE_TERMS = ["ppc-sm", "meta", "facebook", "instagram"];
 
 function isMetaSourced(source: string): boolean {
   const s = (source || "").trim().toLowerCase();
-  return META_SOURCE_PREFIXES.some((prefix) => s.startsWith(prefix));
+  return META_SOURCE_TERMS.some((term) => s.includes(term));
 }
 
 interface LsqLeadFields {
